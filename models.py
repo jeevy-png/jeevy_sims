@@ -153,6 +153,8 @@ class JobComponent:
     quality_checks_done: int = 0
     quality_checks_total: int = 3       # configurable; set by compute_quality_check_thresholds
     quality_failure_count: int = 0      # number of quality check failures so far
+    quality_checks_performed: int = 0   # total number of quality checks run on this component
+    shop_assignment_history: list[int] = field(default_factory=list)
     quality_failure_penalty_applied: bool = False
     timeline_failure_penalty_applied: bool = False
 

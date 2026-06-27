@@ -212,6 +212,7 @@ class SecondarySimulationRun:
             # Allocate (no reallocation in secondary mode)
             comp.assigned_shop = chosen
             chosen.assigned_components.append(comp)
+            comp.shop_assignment_history.append(chosen.shop_id)
             comp.allocation_delay = True
             daily_mh = min(
                 comp.max_workers * comp.max_daily_manhours_per_worker,
@@ -281,6 +282,7 @@ class SecondarySimulationRun:
 
             # Final quality check: no cost, no re-routing, but marks failure
             q_pass = shop.quality_rate if shop else 0.9
+            comp.quality_checks_performed += 1
             if self.rng.random() > q_pass:
                 comp.quality_failed = True
                 self._apply_failure_penalty(comp, "quality")

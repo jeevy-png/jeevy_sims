@@ -100,6 +100,7 @@ def allocate_component(
 
     comp.assigned_shop = shop
     shop.assigned_components.append(comp)
+    comp.shop_assignment_history.append(shop.shop_id)
     comp.days_in_current_shop = 0
     comp.allocation_delay = True  # 1-day delay before work starts
 
@@ -308,6 +309,7 @@ class SimulationRun:
                 and comp.manhours_done >= comp.quality_check_manhour_thresholds[comp.quality_checks_done]
             ):
                 comp.total_cost += comp.quality_cost
+                comp.quality_checks_performed += 1
                 if self.rng.random() > comp.per_check_quality_pass_prob:
                     if self._handle_quality_failure(comp, shop):
                         self.active_components.remove(comp)
@@ -470,6 +472,7 @@ class SimulationRun:
             if comp.manhours_done >= comp.capacity_needed:
                 comp.manhours_done = comp.capacity_needed
                 comp.total_cost += comp.quality_cost
+                comp.quality_checks_performed += 1
                 if self.rng.random() > comp.per_check_quality_pass_prob:
                     if self._handle_quality_failure(comp, shop):
                         self.active_components.remove(comp)

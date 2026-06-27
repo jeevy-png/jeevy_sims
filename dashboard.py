@@ -4,6 +4,7 @@ import datetime as dt
 from pathlib import Path
 from typing import Optional
 
+import matplotlib.pyplot as plt
 import streamlit as st
 
 from plotting import (
@@ -18,6 +19,175 @@ from simulation import SimulationRun
 from simulation_secondary import SecondarySimulationRun
 from stats import aggregate_runs
 from models import DEFAULT_JOB_CONFIG, SHOP_TYPE_PARAMS
+
+HUB_LOCATION = (0.5, 0.5)
+
+
+def _apply_brand_theme():
+        st.markdown(
+                """
+                <style>
+                @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;600;700&family=Barlow+Condensed:wght@500;700&display=swap');
+
+                :root {
+                    --bg: #111315;
+                    --panel: #181c20;
+                    --panel-2: #1f252b;
+                    --text: #f2f4f5;
+                    --muted: #a5b0ba;
+                    --accent: #ff6a00;
+                    --accent-2: #ffd166;
+                    --line: #2a3239;
+                }
+
+                .stApp {
+                    background: radial-gradient(circle at 15% 0%, #212932 0%, var(--bg) 45%);
+                    color: var(--text);
+                    font-family: 'Space Grotesk', sans-serif;
+                }
+
+                h1, h2, h3 {
+                    font-family: 'Barlow Condensed', sans-serif;
+                    letter-spacing: 0.04em;
+                    text-transform: uppercase;
+                }
+
+                [data-testid="stSidebar"] {
+                    background: linear-gradient(180deg, #0f1317 0%, #131a20 100%);
+                    border-right: 1px solid var(--line);
+                }
+
+                [data-testid="stSidebar"] h2,
+                [data-testid="stSidebar"] h3,
+                [data-testid="stSidebar"] label,
+                [data-testid="stSidebar"] p,
+                [data-testid="stSidebar"] span {
+                    color: var(--text) !important;
+                }
+
+                .stButton>button {
+                    background: linear-gradient(120deg, var(--accent), #ff8c24);
+                    color: #111315;
+                    border: 0;
+                    border-radius: 8px;
+                    font-weight: 700;
+                    text-transform: uppercase;
+                    letter-spacing: 0.04em;
+                }
+
+                .stExpander {
+                    border: 1px solid var(--line);
+                    border-radius: 10px;
+                    background: rgba(27, 34, 41, 0.7);
+                }
+
+                .jeevy-hero {
+                    background: linear-gradient(135deg, rgba(255,106,0,0.20), rgba(255,209,102,0.10));
+                    border: 1px solid rgba(255,106,0,0.35);
+                    padding: 16px 18px;
+                    border-radius: 12px;
+                    margin-bottom: 14px;
+                }
+
+                .jeevy-hero p {
+                    margin: 0;
+                    color: var(--muted);
+                    font-size: 0.95rem;
+                }
+                </style>
+                """,
+                unsafe_allow_html=True,
+        )
+
+
+def _plot_network_map(sim, title: str, output_dir: Path, filename: str) -> Path:
+    shop_by_id = {s.shop_id: s for s in sim.shops}
+
+    fig, ax = plt.subplots(figsize=(9, 7))
+    fig.patch.set_facecolor("#111315")
+    ax.set_facecolor("#171b1f")
+
+    # Plot shops by type.
+    type_colors = {
+        "Elite": "#30a2ff",
+        "Strong": "#48c774",
+        "Average": "#ffb347",
+        "Risky": "#ff5c5c",
+    }
+    for shop_type, color in type_colors.items():
+        xs = [s.location[0] for s in sim.shops if s.shop_type == shop_type]
+        ys = [s.location[1] for s in sim.shops if s.shop_type == shop_type]
+        if xs:
+            ax.scatter(xs, ys, s=30, c=color, alpha=0.8, label=f"{shop_type} shops")
+
+    # Plot job delivery points and travel paths.
+    delivery_x, delivery_y = [], []
+    for job in sim.jobs.values():
+        for comp in job.components:
+            delivery_x.append(comp.delivery_location[0])
+            delivery_y.append(comp.delivery_location[1])
+
+            history = [shop_by_id[sid] for sid in comp.shop_assignment_history if sid in shop_by_id]
+            if history:
+                # Path through network shops (including re-allocations).
+                for a, b in zip(history[:-1], history[1:]):
+                    ax.plot(
+                        [a.location[0], b.location[0]],
+                        [a.location[1], b.location[1]],
+                        color="#ff8c24",
+                        linewidth=1.1,
+                        alpha=0.65,
+                    )
+
+                # Last hop to delivery.
+                last = history[-1]
+                ax.plot(
+                    [last.location[0], comp.delivery_location[0]],
+                    [last.location[1], comp.delivery_location[1]],
+                    color="#8be9fd",
+                    linewidth=0.9,
+                    alpha=0.5,
+                    linestyle="--",
+                )
+
+                # Quality checks shown as links to hub.
+                if comp.quality_checks_performed > 0:
+                    unique_shops = list({s.shop_id: s for s in history}.values())
+                    checks_per_shop = max(1, int(round(comp.quality_checks_performed / max(1, len(unique_shops)))))
+                    for s in unique_shops:
+                        ax.plot(
+                            [s.location[0], HUB_LOCATION[0]],
+                            [s.location[1], HUB_LOCATION[1]],
+                            color="#ffd166",
+                            linewidth=0.4 + 0.25 * checks_per_shop,
+                            alpha=0.25,
+                            linestyle=":",
+                        )
+
+    if delivery_x:
+        ax.scatter(delivery_x, delivery_y, s=24, c="#f7f7f7", alpha=0.65, marker="x", label="Job deliveries")
+
+    # Hub marker.
+    ax.scatter([HUB_LOCATION[0]], [HUB_LOCATION[1]], s=120, c="#ffd166", marker="*", label="Quality hub")
+
+    ax.set_title(title, color="#f2f4f5", fontsize=13, fontweight="bold")
+    ax.set_xlim(0, 1)
+    ax.set_ylim(0, 1)
+    ax.set_xlabel("X Location", color="#d7dde2")
+    ax.set_ylabel("Y Location", color="#d7dde2")
+    ax.grid(color="#313942", alpha=0.3)
+    ax.tick_params(colors="#d7dde2")
+    for spine in ax.spines.values():
+        spine.set_color("#39424c")
+    leg = ax.legend(facecolor="#171b1f", edgecolor="#39424c", fontsize=8)
+    for text in leg.get_texts():
+        text.set_color("#f2f4f5")
+
+    out_path = output_dir / filename
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=160, bbox_inches="tight")
+    plt.close(fig)
+    return out_path
 
 
 def _parse_days_list(raw: str) -> list[int]:
@@ -147,8 +317,9 @@ def _run_primary(
     shop_type_params_override: Optional[dict[str, dict]],
     job_config: Optional[dict],
     output_dir: str,
-) -> dict:
+) -> tuple[dict, SimulationRun]:
     all_stats = []
+    exemplar_sim: Optional[SimulationRun] = None
     for r in range(runs):
         sim = SimulationRun(
             num_shops=shops,
@@ -168,12 +339,14 @@ def _run_primary(
         )
         sim.run()
         all_stats.append(sim.get_statistics())
+        if exemplar_sim is None:
+            exemplar_sim = sim
 
     agg = aggregate_runs(all_stats)
     plot_shop_statistics(agg, output_dir=output_dir, label="Primary")
     plot_job_statistics(agg, output_dir=output_dir, label="Primary")
     plot_success_rates_vs_targets(agg, output_dir=output_dir, label="Primary")
-    return agg
+    return agg, exemplar_sim
 
 
 def _run_secondary(
@@ -193,10 +366,11 @@ def _run_secondary(
     job_config: Optional[dict],
     output_dir: str,
     methods: tuple[str, ...] = ("random_cheapest", "quality_top"),
-) -> dict[str, dict]:
-    results: dict[str, dict] = {}
+) -> dict[str, dict[str, object]]:
+    results: dict[str, dict[str, object]] = {}
     for method in methods:
         all_stats = []
+        exemplar_sim: Optional[SecondarySimulationRun] = None
         for r in range(runs):
             method_seed = seed + 1000 + r + (500 if method == "quality_top" else 0)
             sim = SecondarySimulationRun(
@@ -217,9 +391,11 @@ def _run_secondary(
             )
             sim.run()
             all_stats.append(sim.get_statistics())
+            if exemplar_sim is None:
+                exemplar_sim = sim
 
         agg = aggregate_runs(all_stats)
-        results[method] = agg
+        results[method] = {"agg": agg, "sim": exemplar_sim}
         label = "BaseCase" if method == "random_cheapest" else "PartialNetwork"
         plot_shop_statistics(agg, output_dir=output_dir, label=label)
         plot_job_statistics(agg, output_dir=output_dir, label=label)
@@ -240,8 +416,16 @@ def _render_images(output_dir: Path):
 
 def main():
     st.set_page_config(page_title="Jeevy Simulation Dashboard", layout="wide")
+    _apply_brand_theme()
     st.title("Jeevy Simulation Dashboard")
-    st.write("Configure parameters on the left, then run simulations and view plots on the right.")
+    st.markdown(
+        """
+        <div class="jeevy-hero">
+          <p><strong>Fabrication, re-engineered.</strong> Tune network constraints, run scenarios, and compare capacity outcomes across base, partial, and full-network cases.</p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
     with st.sidebar:
         st.header("Run Controls")
@@ -341,9 +525,10 @@ def main():
                 with st.spinner("Running simulation..."):
                     agg_primary = None
                     agg_secondary = None
+                    map_paths: list[Path] = []
 
                     if case_mode in ("full network", "all cases"):
-                        agg_primary = _run_primary(
+                        agg_primary, primary_sim = _run_primary(
                             runs=int(runs),
                             shops=int(shops),
                             days=int(days),
@@ -365,6 +550,15 @@ def main():
                         plot_shop_statistics(agg_primary, output_dir=str(output_dir), label="FullNetwork")
                         plot_job_statistics(agg_primary, output_dir=str(output_dir), label="FullNetwork")
                         plot_success_rates_vs_targets(agg_primary, output_dir=str(output_dir), label="FullNetwork")
+                        if primary_sim is not None:
+                            map_paths.append(
+                                _plot_network_map(
+                                    primary_sim,
+                                    "Full Network Flow Map",
+                                    output_dir,
+                                    "network_map_full_network.png",
+                                )
+                            )
 
                     if case_mode in ("base case", "partial network", "all cases"):
                         if case_mode == "base case":
@@ -392,6 +586,30 @@ def main():
                             methods=methods,
                         )
 
+                        if "random_cheapest" in agg_secondary:
+                            sec_rand_sim = agg_secondary["random_cheapest"].get("sim")
+                            if sec_rand_sim is not None:
+                                map_paths.append(
+                                    _plot_network_map(
+                                        sec_rand_sim,
+                                        "Base Case Flow Map",
+                                        output_dir,
+                                        "network_map_base_case.png",
+                                    )
+                                )
+
+                        if "quality_top" in agg_secondary:
+                            sec_qual_sim = agg_secondary["quality_top"].get("sim")
+                            if sec_qual_sim is not None:
+                                map_paths.append(
+                                    _plot_network_map(
+                                        sec_qual_sim,
+                                        "Partial Network Flow Map",
+                                        output_dir,
+                                        "network_map_partial_network.png",
+                                    )
+                                )
+
                     if (
                         case_mode == "all cases"
                         and agg_primary is not None
@@ -401,27 +619,34 @@ def main():
                     ):
                         plot_comparison(
                             agg_primary=agg_primary,
-                            agg_secondary_rand=agg_secondary["random_cheapest"],
-                            agg_secondary_qual=agg_secondary["quality_top"],
+                            agg_secondary_rand=agg_secondary["random_cheapest"]["agg"],
+                            agg_secondary_qual=agg_secondary["quality_top"]["agg"],
                             output_dir=str(output_dir),
                         )
                         plot_job_cost_comparison(
                             agg_primary=agg_primary,
-                            agg_secondary_rand=agg_secondary["random_cheapest"],
-                            agg_secondary_qual=agg_secondary["quality_top"],
+                            agg_secondary_rand=agg_secondary["random_cheapest"]["agg"],
+                            agg_secondary_qual=agg_secondary["quality_top"]["agg"],
                             output_dir=str(output_dir),
                         )
                         plot_shop_comparison(
                             agg_primary=agg_primary,
-                            agg_secondary_rand=agg_secondary["random_cheapest"],
-                            agg_secondary_qual=agg_secondary["quality_top"],
+                            agg_secondary_rand=agg_secondary["random_cheapest"]["agg"],
+                            agg_secondary_qual=agg_secondary["quality_top"]["agg"],
                             output_dir=str(output_dir),
                         )
 
                 st.session_state["last_output_dir"] = str(output_dir)
+                st.session_state["last_map_paths"] = [str(p) for p in map_paths]
                 st.success(f"Run complete. Plots saved to: {output_dir}")
             except Exception as exc:
                 st.error(f"Run failed: {exc}")
+
+        map_paths = st.session_state.get("last_map_paths", [])
+        if map_paths:
+            st.subheader("Network Travel Maps")
+            for p in map_paths:
+                st.image(p, caption=Path(p).name, use_container_width=True)
 
         last_output_dir = st.session_state.get("last_output_dir")
         if last_output_dir:
