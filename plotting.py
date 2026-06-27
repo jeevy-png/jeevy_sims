@@ -1,0 +1,444 @@
+"""
+plotting.py — All plots for the simulation results.
+"""
+
+from __future__ import annotations
+import numpy as np
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+import matplotlib.gridspec as gridspec
+from pathlib import Path
+
+SHOP_COLORS = {
+    "Elite":   "#2196F3",
+    "Strong":  "#4CAF50",
+    "Average": "#FF9800",
+    "Risky":   "#F44336",
+}
+
+
+def _smooth(arr: np.ndarray, window: int = 7) -> np.ndarray:
+    if window <= 1 or len(arr) < window:
+        return arr
+    kernel = np.ones(window) / window
+    return np.convolve(arr, kernel, mode="same")
+
+
+def plot_shop_statistics(agg: dict, output_dir: str = ".", label: str = ""):
+    """
+    Four subplots:
+      1. Mean daily capacity fraction per shop type
+      2. Mean daily profit per shop type
+      3. Total profit mean per shop type (bar chart)
+      4. Total profit variance per shop type (bar chart)
+    """
+    out = Path(output_dir)
+    out.mkdir(parents=True, exist_ok=True)
+
+    shop_types = agg["shop_types"]
+    days = None
+
+    fig, axes = plt.subplots(2, 2, figsize=(14, 9))
+    fig.suptitle(f"Shop Statistics{' — ' + label if label else ''}", fontsize=14, fontweight="bold")
+
+    # --- 1. Capacity fraction over time (assigned=solid, total incl. busy=dashed) ---
+    ax = axes[0, 0]
+    for st in shop_types:
+        data  = agg["agg_capacity"].get(st)
+        total = agg.get("agg_total_utilization", {}).get(st)
+        if data is None:
+            continue
+        if days is None:
+            days = np.arange(len(data))
+        color = SHOP_COLORS[st]
+        ax.plot(days, _smooth(data),  label=f"{st}",       color=color, linewidth=1.8)
+        if total is not None:
+            ax.plot(days, _smooth(total), linestyle="--", color=color, linewidth=1.2, alpha=0.7)
+    ax.set_title("Mean Daily Worker Utilisation\n(solid = assigned to jobs, dashed = total incl. busy)")
+    ax.set_xlabel("Day")
+    ax.set_ylabel("Fraction of workers occupied")
+    ax.set_ylim(0, 1)
+    ax.legend(fontsize=8)
+    ax.grid(True, alpha=0.3)
+
+    # --- 2. Daily profit per shop type ---
+    ax = axes[0, 1]
+    for st in shop_types:
+        data = agg["agg_profit_mean"].get(st)
+        if data is None:
+            continue
+        d = np.arange(len(data))
+        ax.plot(d, _smooth(data), label=st, color=SHOP_COLORS[st], linewidth=1.8)
+    ax.set_title("Mean Daily Profit per Shop (by type)")
+    ax.set_xlabel("Day")
+    ax.set_ylabel("Profit ($)")
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+
+    # --- 3. Total profit mean ---
+    ax = axes[1, 0]
+    st_present = [st for st in shop_types if st in agg["agg_profit_total_mean"]]
+    vals = [agg["agg_profit_total_mean"][st] for st in st_present]
+    colors = [SHOP_COLORS[st] for st in st_present]
+    bars = ax.bar(st_present, vals, color=colors, edgecolor="white", linewidth=0.8)
+    ax.set_title("Total Annual Profit — Mean per Shop (by type)")
+    ax.set_ylabel("Total Profit ($)")
+    ax.grid(True, axis="y", alpha=0.3)
+    for bar, v in zip(bars, vals):
+        ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() * 1.01, f"${v:,.0f}",
+                ha="center", va="bottom", fontsize=9)
+
+    # --- 4. Total profit variance ---
+    ax = axes[1, 1]
+    vals_var = [agg["agg_profit_total_var"].get(st, 0) for st in st_present]
+    bars = ax.bar(st_present, vals_var, color=colors, edgecolor="white", linewidth=0.8)
+    ax.set_title("Total Annual Profit — Variance per Shop (by type)")
+    ax.set_ylabel("Profit Variance ($ squared)")
+    ax.grid(True, axis="y", alpha=0.3)
+
+    plt.tight_layout()
+    fname = out / f"shop_statistics{'_' + label if label else ''}.png"
+    plt.savefig(fname, dpi=150, bbox_inches="tight")
+    plt.close()
+    print(f"Saved: {fname}")
+
+
+def plot_job_statistics(agg: dict, output_dir: str = ".", label: str = ""):
+    """
+    Four subplots:
+      1. Mean total cost per job type
+      2. Cost variance per job type
+      3. Quality success rate vs. target per job type
+      4. Timeline success rate vs. target per job type
+    """
+    out = Path(output_dir)
+    out.mkdir(parents=True, exist_ok=True)
+
+    job_types = agg.get("job_type_indices") or sorted(agg.get("agg_cost_mean", {}).keys())
+    if not job_types:
+        job_types = [1]
+
+    cost_means  = [agg["agg_cost_mean"].get(jt, 0)  for jt in job_types]
+    cost_vars   = [agg["agg_cost_var"].get(jt, 0)   for jt in job_types]
+    qual_rates  = [agg["agg_quality_rate"].get(jt, 0)  for jt in job_types]
+    time_rates  = [agg["agg_timeline_rate"].get(jt, 0) for jt in job_types]
+    q_targets   = [agg["q_target_map"].get(jt, 0)  for jt in job_types]
+    t_targets   = [agg["t_target_map"].get(jt, 0)  for jt in job_types]
+
+    fig, axes = plt.subplots(2, 2, figsize=(14, 9))
+    fig.suptitle(f"Job Statistics{' — ' + label if label else ''}", fontsize=14, fontweight="bold")
+
+    x = np.arange(len(job_types))
+    bar_width = 0.6
+
+    # --- 1. Cost means ---
+    ax = axes[0, 0]
+    ax.bar(x, cost_means, bar_width, color="#5C6BC0", edgecolor="white")
+    ax.set_xticks(x)
+    ax.set_xticklabels([f"T{jt}" for jt in job_types])
+    ax.set_title("Mean Total Cost per Job Type")
+    ax.set_xlabel("Job Type")
+    ax.set_ylabel("Cost ($)")
+    ax.grid(True, axis="y", alpha=0.3)
+
+    # --- 2. Cost variance ---
+    ax = axes[0, 1]
+    ax.bar(x, cost_vars, bar_width, color="#AB47BC", edgecolor="white")
+    ax.set_xticks(x)
+    ax.set_xticklabels([f"T{jt}" for jt in job_types])
+    ax.set_title("Cost Variance per Job Type")
+    ax.set_xlabel("Job Type")
+    ax.set_ylabel("Variance ($ squared)")
+    ax.grid(True, axis="y", alpha=0.3)
+
+    # --- 3. Quality success rate vs. target ---
+    ax = axes[1, 0]
+    ax.bar(x - 0.18, qual_rates,  0.35, label="Actual",  color="#26A69A", edgecolor="white")
+    ax.bar(x + 0.18, q_targets,   0.35, label="Target",  color="#80CBC4", edgecolor="white", alpha=0.8)
+    ax.set_xticks(x)
+    ax.set_xticklabels([f"T{jt}" for jt in job_types])
+    ax.set_title("Quality Success Rate vs. Target")
+    ax.set_xlabel("Job Type")
+    ax.set_ylabel("Rate")
+    ax.set_ylim(0, 1.05)
+    ax.legend()
+    ax.grid(True, axis="y", alpha=0.3)
+
+    # --- 4. Timeline success rate vs. target ---
+    ax = axes[1, 1]
+    ax.bar(x - 0.18, time_rates, 0.35, label="Actual",  color="#FFA726", edgecolor="white")
+    ax.bar(x + 0.18, t_targets,  0.35, label="Target",  color="#FFCC80", edgecolor="white", alpha=0.8)
+    ax.set_xticks(x)
+    ax.set_xticklabels([f"T{jt}" for jt in job_types])
+    ax.set_title("Timeline Success Rate vs. Target")
+    ax.set_xlabel("Job Type")
+    ax.set_ylabel("Rate")
+    ax.set_ylim(0, 1.05)
+    ax.legend()
+    ax.grid(True, axis="y", alpha=0.3)
+
+    plt.tight_layout()
+    fname = out / f"job_statistics{'_' + label if label else ''}.png"
+    plt.savefig(fname, dpi=150, bbox_inches="tight")
+    plt.close()
+    print(f"Saved: {fname}")
+
+
+def plot_success_rates_vs_targets(agg: dict, output_dir: str = ".", label: str = ""):
+    """
+    Scatter: actual success rate vs. required target, for quality and timeline.
+    """
+    out = Path(output_dir)
+    out.mkdir(parents=True, exist_ok=True)
+
+    job_types = agg.get("job_type_indices") or sorted(agg.get("agg_quality_rate", {}).keys())
+    if not job_types:
+        job_types = [1]
+    q_targets  = np.array([agg["q_target_map"].get(jt, 0)  for jt in job_types])
+    t_targets  = np.array([agg["t_target_map"].get(jt, 0)  for jt in job_types])
+    qual_rates = np.array([agg["agg_quality_rate"].get(jt, 0)  for jt in job_types])
+    time_rates = np.array([agg["agg_timeline_rate"].get(jt, 0) for jt in job_types])
+
+    fig, axes = plt.subplots(1, 2, figsize=(12, 5))
+    fig.suptitle(f"Success Rates vs. Required Targets{' — ' + label if label else ''}", fontsize=13, fontweight="bold")
+
+    for ax, actual, target, title, color in [
+        (axes[0], qual_rates,  q_targets, "Quality",  "#26A69A"),
+        (axes[1], time_rates,  t_targets, "Timeline", "#FFA726"),
+    ]:
+        lo = min(target.min(), actual.min()) - 0.02
+        hi = max(target.max(), actual.max()) + 0.02
+        ax.plot([lo, hi], [lo, hi], "k--", linewidth=1, label="Perfect")
+        sc = ax.scatter(target, actual, c=[i + 1 for i in range(len(job_types))],
+                        cmap="tab10", s=90, zorder=5)
+        for i, jt in enumerate(job_types):
+            ax.annotate(f"T{jt}", (target[i], actual[i]),
+                        textcoords="offset points", xytext=(5, 5), fontsize=8)
+        ax.set_xlabel("Required Target Rate")
+        ax.set_ylabel("Actual Rate")
+        ax.set_title(f"{title} Success Rate")
+        ax.legend()
+        ax.grid(True, alpha=0.3)
+
+    plt.tight_layout()
+    fname = out / f"success_vs_targets{'_' + label if label else ''}.png"
+    plt.savefig(fname, dpi=150, bbox_inches="tight")
+    plt.close()
+    print(f"Saved: {fname}")
+
+
+def plot_comparison(agg_primary: dict, agg_secondary_rand: dict, agg_secondary_qual: dict,
+                    output_dir: str = "."):
+    """Side-by-side quality and timeline success rate comparison across three modes."""
+    out = Path(output_dir)
+    out.mkdir(parents=True, exist_ok=True)
+
+    job_types = sorted(
+        set(agg_primary.get("job_type_indices", []))
+        | set(agg_secondary_rand.get("job_type_indices", []))
+        | set(agg_secondary_qual.get("job_type_indices", []))
+    )
+    if not job_types:
+        job_types = [1]
+    x = np.arange(len(job_types))
+    w = 0.22
+
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+    fig.suptitle("Mode Comparison: Quality & Timeline Success Rates", fontsize=13, fontweight="bold")
+
+    for ax, key, title in [
+        (axes[0], "agg_quality_rate",  "Quality Success Rate"),
+        (axes[1], "agg_timeline_rate", "Timeline Success Rate"),
+    ]:
+        p  = [agg_primary.get(key, {}).get(jt, 0)          for jt in job_types]
+        sr = [agg_secondary_rand.get(key, {}).get(jt, 0)   for jt in job_types]
+        sq = [agg_secondary_qual.get(key, {}).get(jt, 0)   for jt in job_types]
+
+        ax.bar(x - w, p,  w, label="Primary",          color="#5C6BC0", edgecolor="white")
+        ax.bar(x,     sr, w, label="Sec: Random",      color="#26A69A", edgecolor="white")
+        ax.bar(x + w, sq, w, label="Sec: Quality-top", color="#FFA726", edgecolor="white")
+        ax.set_xticks(x)
+        ax.set_xticklabels([f"T{jt}" for jt in job_types])
+        ax.set_title(title)
+        ax.set_xlabel("Job Type")
+        ax.set_ylabel("Rate")
+        if title == "Quality Success Rate":
+            ax.set_ylim(0.7, 1.05)
+        else:
+            ax.set_ylim(0, 1.05)
+        ax.legend(fontsize=8)
+        ax.grid(True, axis="y", alpha=0.3)
+
+    plt.tight_layout()
+    fname = out / "mode_comparison.png"
+    plt.savefig(fname, dpi=150, bbox_inches="tight")
+    plt.close()
+    print(f"Saved: {fname}")
+
+
+def plot_shop_comparison(agg_primary: dict, agg_secondary_rand: dict, agg_secondary_qual: dict,
+                         output_dir: str = "."):
+    """
+    Combined 4x3 grid comparing shop statistics across all three modes.
+    Rows: capacity fraction | daily profit | total profit mean | total profit variance
+    Columns: Primary | Sec-Random | Sec-QualTop
+    """
+    out = Path(output_dir)
+    out.mkdir(parents=True, exist_ok=True)
+
+    shop_types = ["Elite", "Strong", "Average", "Risky"]
+    modes = [
+        (agg_primary,        "Primary"),
+        (agg_secondary_rand, "Secondary: Random-Cheapest"),
+        (agg_secondary_qual, "Secondary: Quality-Top"),
+    ]
+
+    fig, axes = plt.subplots(4, 3, figsize=(18, 16))
+    fig.suptitle("Shop Statistics — All Modes Compared", fontsize=15, fontweight="bold")
+
+    row_titles = [
+        "Mean Daily Capacity Utilisation",
+        "Mean Daily Profit per Shop ($)",
+        "Total Annual Profit — Mean per Shop ($)",
+        "Total Annual Profit — Variance per Shop",
+    ]
+
+    for col, (agg, mode_label) in enumerate(modes):
+        axes[0, col].set_title(mode_label, fontsize=11, fontweight="bold", pad=8)
+
+        # Row 0: Capacity fraction over time (solid=assigned, dashed=total incl. busy)
+        ax = axes[0, col]
+        for st in shop_types:
+            data  = agg["agg_capacity"].get(st)
+            total = agg.get("agg_total_utilization", {}).get(st)
+            if data is None:
+                continue
+            days = np.arange(len(data))
+            color = SHOP_COLORS[st]
+            ax.plot(days, _smooth(data),  label=st, color=color, linewidth=1.6)
+            if total is not None:
+                ax.plot(days, _smooth(total), linestyle="--", color=color, linewidth=1.0, alpha=0.7)
+        ax.set_ylim(0, 1)
+        ax.set_xlabel("Day")
+        if col == 0:
+            ax.set_ylabel(row_titles[0], fontsize=9)
+            ax.legend(fontsize=8)
+        ax.grid(True, alpha=0.3)
+
+        # Row 1: Daily profit
+        ax = axes[1, col]
+        for st in shop_types:
+            data = agg["agg_profit_mean"].get(st)
+            if data is None:
+                continue
+            d = np.arange(len(data))
+            ax.plot(d, _smooth(data), label=st, color=SHOP_COLORS[st], linewidth=1.6)
+        ax.set_xlabel("Day")
+        if col == 0:
+            ax.set_ylabel(row_titles[1], fontsize=9)
+            ax.legend(fontsize=8)
+        ax.grid(True, alpha=0.3)
+
+        # Row 2: Total profit mean (bar)
+        ax = axes[2, col]
+        st_present = [st for st in shop_types if st in agg.get("agg_profit_total_mean", {})]
+        vals = [agg["agg_profit_total_mean"][st] for st in st_present]
+        colors = [SHOP_COLORS[st] for st in st_present]
+        bars = ax.bar(st_present, vals, color=colors, edgecolor="white")
+        if col == 0:
+            ax.set_ylabel(row_titles[2], fontsize=9)
+        ax.grid(True, axis="y", alpha=0.3)
+        for bar, v in zip(bars, vals):
+            ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() * 1.01,
+                    f"${v:,.0f}", ha="center", va="bottom", fontsize=7)
+
+        # Row 3: Total profit variance (bar)
+        ax = axes[3, col]
+        vals_var = [agg.get("agg_profit_total_var", {}).get(st, 0) for st in st_present]
+        bars = ax.bar(st_present, vals_var, color=colors, edgecolor="white")
+        if col == 0:
+            ax.set_ylabel(row_titles[3], fontsize=9)
+        ax.grid(True, axis="y", alpha=0.3)
+
+    plt.tight_layout(rect=[0, 0, 1, 0.97])
+    fname = out / "shop_comparison_all_modes.png"
+    plt.savefig(fname, dpi=150, bbox_inches="tight")
+    plt.close()
+    print(f"Saved: {fname}")
+
+
+def plot_job_cost_comparison(agg_primary: dict, agg_secondary_rand: dict, agg_secondary_qual: dict,
+                              output_dir: str = "."):
+    """
+    Two-panel figure comparing job costs across all three simulation modes.
+
+    Top panel:    Grouped bar chart — mean total cost per job type, one bar per mode.
+    Bottom panel: Grouped bar chart — cost variance per job type, one bar per mode.
+    """
+    out = Path(output_dir)
+    out.mkdir(parents=True, exist_ok=True)
+
+    job_types = sorted(
+        set(agg_primary.get("job_type_indices", []))
+        | set(agg_secondary_rand.get("job_type_indices", []))
+        | set(agg_secondary_qual.get("job_type_indices", []))
+    )
+    if not job_types:
+        job_types = [1]
+    x = np.arange(len(job_types))
+    w = 0.25   # bar width
+
+    modes = [
+        (agg_primary,        "Primary",              "#5C6BC0"),
+        (agg_secondary_rand, "Secondary: Random",    "#26A69A"),
+        (agg_secondary_qual, "Secondary: Qual-Top",  "#FFA726"),
+    ]
+
+    fig, axes = plt.subplots(2, 1, figsize=(14, 10))
+    fig.suptitle("Job Cost Comparison Across Simulation Modes", fontsize=14, fontweight="bold")
+
+    # --- Top: mean cost ---
+    ax = axes[0]
+    for i, (agg, label, color) in enumerate(modes):
+        vals = [agg["agg_cost_mean"].get(jt, 0) for jt in job_types]
+        offset = (i - 1) * w
+        bars = ax.bar(x + offset, vals, w, label=label, color=color, edgecolor="white")
+
+    ax.set_xticks(x)
+    ax.set_xticklabels([f"T{jt}" for jt in job_types])
+    ax.set_title("Mean Total Cost per Job Type")
+    ax.set_xlabel("Job Type")
+    ax.set_ylabel("Mean Cost ($)")
+    ax.legend()
+    ax.grid(True, axis="y", alpha=0.3)
+
+    # Add value labels on top of each bar
+    for i, (agg, label, color) in enumerate(modes):
+        vals = [agg["agg_cost_mean"].get(jt, 0) for jt in job_types]
+        offset = (i - 1) * w
+        for xi, v in zip(x, vals):
+            if v > 0:
+                ax.text(xi + offset, v * 1.005, f"${v/1000:.0f}k",
+                        ha="center", va="bottom", fontsize=6.5, color="#333333")
+
+    # --- Bottom: cost variance ---
+    ax = axes[1]
+    for i, (agg, label, color) in enumerate(modes):
+        vals = [agg["agg_cost_var"].get(jt, 0) for jt in job_types]
+        offset = (i - 1) * w
+        ax.bar(x + offset, vals, w, label=label, color=color, edgecolor="white")
+
+    ax.set_xticks(x)
+    ax.set_xticklabels([f"T{jt}" for jt in job_types])
+    ax.set_title("Cost Variance per Job Type")
+    ax.set_xlabel("Job Type")
+    ax.set_ylabel("Variance ($ squared)")
+    ax.legend()
+    ax.grid(True, axis="y", alpha=0.3)
+
+    plt.tight_layout()
+    fname = out / "job_cost_comparison.png"
+    plt.savefig(fname, dpi=150, bbox_inches="tight")
+    plt.close()
+    print(f"Saved: {fname}")

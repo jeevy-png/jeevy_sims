@@ -1,0 +1,188 @@
+We propose a graph based simulation to verify the shop side and client side value in this model. We set up a feedforward network with configurable width and depth. Each node on a given layer represents a shop, and each layer represents one working day. The default configuration is 100 shops and 300 days. Each shop has the following parameters:
+
+num_workers           #number of employees in the shop (fixed per shop type)
+quality_rate          #probability that a job component passes a single quality check
+work_efficiency       #fraction of man-hours input by the shop that count as useful progress toward job completion
+labor_cost_multiplier #multiplier of labor cost due to skill of workers
+worker_capacity       #amount of man-hours each worker can provide per day
+busy_worker_rate      #per-worker probability that an unassigned worker is occupied with external work on a given day
+location              #location on the map used to calculate transportation costs
+
+Shops are randomly generated and placed at the beginning of the simulation, and are of the four following types with following parameters (true parameters are selected from a gaussian distribution with the given parameters, so no shops are identical, except num_workers which is fixed). busy_worker_rate is clipped to [0, 0.5] to ensure shops remain frequently available for allocation.
+
+Elite (10%):
+num_workers = 9
+quality_rate_mean = 0.995, quality_rate_std = 0.003
+work_efficiency_mean = 0.98, work_efficiency_std = 0.01
+worker_capacity_mean = 10, worker_capacity_std = 1.0
+labor_cost_multiplier_mean = 1.25, labor_cost_multiplier_std = 0.05
+busy_worker_rate_mean = 0.15, busy_worker_rate_std = 0.02
+
+Strong (30%):
+num_workers = 6
+quality_rate_mean = 0.985, quality_rate_std = 0.01
+work_efficiency_mean = 0.96, work_efficiency_std = 0.02
+worker_capacity_mean = 10, worker_capacity_std = 1.22
+labor_cost_multiplier_mean = 1.0, labor_cost_multiplier_std = 0.1
+busy_worker_rate_mean = 0.12, busy_worker_rate_std = 0.02
+
+Average (40%):
+num_workers = 5
+quality_rate_mean = 0.94, quality_rate_std = 0.03
+work_efficiency_mean = 0.92, work_efficiency_std = 0.03
+worker_capacity_mean = 10, worker_capacity_std = 1.79
+labor_cost_multiplier_mean = 0.9, labor_cost_multiplier_std = 0.15
+busy_worker_rate_mean = 0.08, busy_worker_rate_std = 0.02
+
+Risky (20%):
+num_workers = 5
+quality_rate_mean = 0.88, quality_rate_std = 0.05
+work_efficiency_mean = 0.85, work_efficiency_std = 0.05
+worker_capacity_mean = 10, worker_capacity_std = 1.79
+labor_cost_multiplier_mean = 0.8, labor_cost_multiplier_std = 0.2
+busy_worker_rate_mean = 0.05, busy_worker_rate_std = 0.01
+
+Shops are all located randomly uniformly in the unit square [0,1]x[0,1].
+
+Each day we then introduce jobs into the system. Each job is comprised of multiple job components. Each job component must be sent to a single shop, and will take up one worker slot in that shop until that job component is complete or re-routed to another shop. Each job component has the following parameters:
+
+deadline_days                  #how many days the component can take, including any transport and delays, before failing
+max_workers                    #maximum number of workers that can work on this job component simultaneously (always 2, but each component occupies exactly 1 worker slot)
+capacity_needed                #number of effective man-hours needed to complete the job
+quality_cost                   #flat cost charged each time a quality check is performed on this component
+material_cost                  #flat cost of job materials, charged once upon job creation
+base_labor_rate                #base labor cost per man-hour of raw input work (multiplied by the shop's labor_cost_multiplier)
+base_transportation_cost       #base coefficient scaled by distance to compute all transport costs for this component
+max_daily_manhours_per_worker  #cap on raw man-hours one worker can contribute per day
+timeline_reliability_target    #minimum work_efficiency a shop must have to be eligible for dispatch; also used to track aggregate timeline reliability
+quality_reliability_target     #minimum quality_rate a shop must have to be eligible for dispatch; also used to track aggregate quality success rates
+delivery_location              #destination coordinates used for final transportation cost calculation
+
+All job components across a single job share the same parameters and delivery location. Jobs are generated each day and are sampled in proportion to their total capacity requirement (larger jobs are more likely to be selected). There are 10 job types indexed by i in {1,...,10}. The following gives the formula for the parameters of each job type:
+
+num_components = ceiling(i / 5)
+deadline_days = ceiling((6 + i*7) / num_components)
+capacity_needed (per component) = (200 + 111*(i-1)) / num_components
+max_workers (per component) = 2
+quality_cost = 800 + 44*(i-1)
+material_cost = 8000 + 4444*(i-1)
+max_daily_manhours_per_worker = 10
+base_labor_rate = 8 + 4*(i-1)
+base_transportation_cost = 2000 + 1111*(i-1)
+timeline_reliability_target = 0.8 + 0.01*i
+quality_reliability_target = 0.94 + 0.005*i
+
+Delivery location is randomly assigned uniformly in the unit square, and all components of the same job share the same delivery location.
+
+If a job component is infeasible (max_workers * max_daily_manhours_per_worker * deadline_days < capacity_needed), print an error and skip the entire job.
+
+The daily man-hours a shop inputs on a component is:
+    daily_mh = min(max_workers * max_daily_manhours_per_worker, max_workers * shop.worker_capacity)
+
+The effective progress credited toward capacity_needed each day is:
+    progress = daily_mh * shop.work_efficiency
+
+Labor costs and shop profit are always computed on the raw input daily_mh, not the efficiency-adjusted progress.
+
+
+PRIMARY SIMULATION MODE
+
+Given this, the main simulation loop operates as follows.
+At each time-step we:
+	1	Perform quality checks
+		1	Each job component has a configurable number of quality checks (default 3) evenly spaced throughout its work timeline. Check thresholds are placed at (k / num_checks) * capacity_needed man-hours of accumulated progress, for k = 1 through num_checks. The final check always lands exactly at 100% completion and is handled separately at the moment of completion (see step 5). Steps here handle only the first (num_checks - 1) intermediate checks.
+		2	Each quality check has equal probability of passing such that the probability of passing all checks combined equals the shop's quality_rate. The per-check pass probability is quality_rate^(1/num_checks).
+		3	If a component's accumulated progress has crossed the threshold for its next intermediate check at the start of this day, the check is performed and the quality check cost is added.
+		4	If a quality check is failed:
+			1	If this is the component's first ever quality failure: halve the accumulated progress, reset the check counter, recompute check thresholds, remove the component from its current shop, and place it in the pool of components needing re-assignment. The component and job are not marked as quality failures at this stage.
+			2	If the component has already failed a previous quality check: mark the component and its job as quality failures. The component continues working at its current shop without re-routing.
+	2	Generate new jobs
+		1	A random set of jobs is generated each day and their components are added to the pool needing assignment.
+		2	Material costs are added to each new component's total cost immediately upon creation.
+	3	Determine busy workers
+		1	For each shop, the number of unassigned workers occupied with external work today is drawn from Binomial(free_workers, busy_worker_rate), where free_workers is the count of workers not currently assigned to any job component.
+		2	Busy workers are unavailable for new job component allocations for the remainder of this day. Workers already assigned to job components are unaffected.
+	4	Allocate all free job components to shops
+		1	For each job component in the pool needing assignment, eligible shops are identified by these criteria:
+			1	The shop must have at least one available worker slot after accounting for busy workers: (free_workers - busy_workers_today) >= 1.
+			2	The shop must be able to finish the component before its deadline, accounting for the 1-day allocation delay: (remaining_progress / (daily_mh * work_efficiency)) + 1 <= days_remaining.
+			3	The shop's quality_rate must be >= the component's quality_reliability_target.
+			4	The shop's work_efficiency must be >= the component's timeline_reliability_target.
+		2	Among eligible shops, the component is assigned to the one with the lowest estimated total cost:
+			estimated_labor_cost = daily_mh * expected_days * base_labor_rate * labor_cost_multiplier
+			transport_cost = base_transportation_cost * distance(shop.location, delivery_location)
+		3	If no eligible shop is found, the component stays in the unassigned pool and is retried the next day.
+		4	If a component's days_remaining has reached zero while in the unassigned pool, it is marked as a timeline failure and removed from the pool.
+		5	When a component is re-allocated after a quality failure, a transportation cost is charged: base_transportation_cost * distance(previous_shop.location, new_shop.location).
+		6	All newly allocated components undergo a 1-day delay before work begins. This day still counts against the deadline.
+	5	Execute daily work
+		1	For each job component past its allocation delay, progress is advanced: manhours_done += daily_mh * shop.work_efficiency.
+		2	When accumulated progress reaches or exceeds capacity_needed, the final (nth) quality check is triggered:
+			1	A quality check cost is added.
+			2	The same per-check pass probability (quality_rate^(1/num_checks)) is used.
+			3	If failed and this is the component's first ever quality failure: halve the progress, reset the check counter, recompute thresholds, and re-route the component to the unassigned pool. The component is not yet marked as a failure.
+			4	If failed and the component has already failed a previous check: mark the component and its job as quality failures, then complete the component normally. No re-routing occurs.
+			5	If passed: mark the component as complete.
+	6	Aggregate costs
+		1	For each active component not in allocation delay, add today's labor cost: daily_mh * base_labor_rate * labor_cost_multiplier. Ten percent of this is credited as profit to the shop for the day.
+		2	For each shop, credit profit from workers busy with external work: busy_workers_today * worker_capacity * 26.0 * labor_cost_multiplier * 0.10, where 26.0 is the average base_labor_rate across all job types.
+	7	Handle completions
+		1	For each component completed this day, add transportation cost from the completing shop directly to the delivery location: base_transportation_cost * distance(shop.location, delivery_location).
+		2	If all components of a job are now complete, the job is marked as complete. A job is a timeline success if the minimum days_remaining across all its components is >= 2 at the moment the last component finishes. Otherwise it is a timeline failure.
+		3	The job's total cost is the sum of all component total costs.
+	8	Record statistics
+		1	For each shop, record the fraction of total worker slots occupied by active components (assigned_components / num_workers) and the count of busy workers today.
+	9	Decrement deadlines
+		1	All active and unassigned components have their days_remaining decremented by 1.
+
+At the end of the simulation, any jobs still incomplete are marked as timeline failures.
+
+
+SECONDARY SIMULATION MODE
+
+We also allow for a secondary simulation mode which only executes the following.
+At each time-step we:
+	1	Generate new jobs
+		1	Same job pool as before, same generation method. Material costs are added immediately.
+	2	Determine busy workers
+		1	Same binomial draw as the primary mode. Busy workers are unavailable for allocation that day and generate the same profit contribution.
+	3	Allocate new job components
+		1	This mode allows for two different allocation methods.
+			1	The first (random_cheapest) randomly samples up to 5 available shops with at least one available worker slot (free workers minus busy workers >= 1) and assigns to the cheapest among them by estimated cost (estimated_labor_cost + transport_cost to delivery location). Note: work_efficiency is not applied in the cost estimate in this mode.
+			2	The second (quality_top) ranks all available shops with at least one available worker slot by quality_rate descending and assigns to the highest-quality shop.
+		2	There is no filtering by quality_rate, work_efficiency, or deadline feasibility.
+		3	There is no re-allocation in secondary mode. Components are never moved once assigned.
+		4	The 1-day allocation delay applies as in the primary mode.
+	4	Execute daily work
+		1	Daily work is executed the same as the primary mode: progress = daily_mh * shop.work_efficiency. There are no mid-work quality checks.
+	5	Aggregate costs
+		1	Labor costs are added the same as the primary mode.
+		2	Busy worker profit is credited the same as the primary mode.
+		3	There are no quality check costs and no re-allocation transportation costs.
+	6	Handle completions
+		1	Transportation cost is added directly from the completing shop to the delivery location (same formula as primary mode; no intermediate hub).
+		2	A single final quality check is performed using the shop's raw quality_rate as the pass probability. If failed, the component and job are marked as quality failures. This check adds no cost and does not trigger re-routing.
+		3	Job completion and timeline success are determined the same way as in the primary mode.
+	7	Record statistics
+		1	Same shop statistics as the primary mode: assigned fraction, busy workers, daily profit.
+
+
+STATISTICS
+
+During the simulation, we track across all shops the following statistics:
+Fraction of total worker capacity per shop used per day (assigned to job components)
+Number of busy workers per shop per day (occupied with external work)
+Total utilization per shop per day (assigned fraction + busy fraction, clipped to [0, 1])
+Profit per day throughout year (10% of labor costs from assigned jobs plus 10% margin on busy worker external labor)
+Total profit mean across year
+Total profit variance across year
+With these statistics separated out by shop type and averaged across however many simulation runs are executed, and then plotted. The utilization plot shows assigned-worker fraction as solid lines and total utilization (assigned plus busy) as dashed lines per shop type.
+
+Then per job we track the following statistics:
+Total cost
+Cost variance
+Quality success rate (fraction of jobs where no component accumulates two quality check failures)
+Timeline success rate (fraction of jobs completed at least 2 days before deadline)
+And plot these averages with respect to each of the 10 job types, and in the case of the success rates, with respect to the different required rates of the different job types.
+
+The simulation has hyperparameters for how many 300-day runs are computed and averaged for global statistics, along with how many shops there are (default 100), how many jobs are generated each day (default 5), and how many quality checks are performed per component in the primary mode (default 1).
