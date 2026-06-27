@@ -52,25 +52,22 @@ def _plot_network_map(sim, title: str, output_dir: Path, filename: str) -> Path:
 
             history = [shop_by_id[sid] for sid in comp.shop_assignment_history if sid in shop_by_id]
             if history:
-                # Path through network shops (including re-allocations).
+                # Path through network shops (including re-allocations) with arrows.
                 for a, b in zip(history[:-1], history[1:]):
-                    ax.plot(
-                        [a.location[0], b.location[0]],
-                        [a.location[1], b.location[1]],
-                        color="#ff8c24",
-                        linewidth=1.1,
-                        alpha=0.65,
+                    ax.annotate(
+                        "",
+                        xy=(b.location[0], b.location[1]),
+                        xytext=(a.location[0], a.location[1]),
+                        arrowprops=dict(arrowstyle="->", color="#ff8c24", lw=1.1, alpha=0.65),
                     )
 
-                # Last hop to delivery.
+                # Last hop to delivery with arrow.
                 last = history[-1]
-                ax.plot(
-                    [last.location[0], comp.delivery_location[0]],
-                    [last.location[1], comp.delivery_location[1]],
-                    color="#8be9fd",
-                    linewidth=0.9,
-                    alpha=0.5,
-                    linestyle="--",
+                ax.annotate(
+                    "",
+                    xy=(comp.delivery_location[0], comp.delivery_location[1]),
+                    xytext=(last.location[0], last.location[1]),
+                    arrowprops=dict(arrowstyle="->", color="#8be9fd", lw=0.9, alpha=0.5, linestyle="dashed"),
                 )
 
                 # Quality checks shown as links to hub.
@@ -262,8 +259,7 @@ def _run_primary(
         )
         sim.run()
         all_stats.append(sim.get_statistics())
-        if exemplar_sim is None:
-            exemplar_sim = sim
+        exemplar_sim = sim  # always keep last run
 
     agg = aggregate_runs(all_stats)
     plot_shop_statistics(agg, output_dir=output_dir, label="Primary")
@@ -469,7 +465,7 @@ def main():
                             map_paths.append(
                                 _plot_network_map(
                                     primary_sim,
-                                    "Full Network Flow Map",
+                                    "Full Network Flow Map (final run)",
                                     output_dir,
                                     "network_map_full_network.png",
                                 )
@@ -500,30 +496,6 @@ def main():
                             output_dir=str(output_dir),
                             methods=methods,
                         )
-
-                        if "random_cheapest" in agg_secondary:
-                            sec_rand_sim = agg_secondary["random_cheapest"].get("sim")
-                            if sec_rand_sim is not None:
-                                map_paths.append(
-                                    _plot_network_map(
-                                        sec_rand_sim,
-                                        "Base Case Flow Map",
-                                        output_dir,
-                                        "network_map_base_case.png",
-                                    )
-                                )
-
-                        if "quality_top" in agg_secondary:
-                            sec_qual_sim = agg_secondary["quality_top"].get("sim")
-                            if sec_qual_sim is not None:
-                                map_paths.append(
-                                    _plot_network_map(
-                                        sec_qual_sim,
-                                        "Partial Network Flow Map",
-                                        output_dir,
-                                        "network_map_partial_network.png",
-                                    )
-                                )
 
                     if (
                         case_mode == "all cases"
