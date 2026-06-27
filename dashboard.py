@@ -23,83 +23,6 @@ from models import DEFAULT_JOB_CONFIG, SHOP_TYPE_PARAMS
 HUB_LOCATION = (0.5, 0.5)
 
 
-def _apply_brand_theme():
-        st.markdown(
-                """
-                <style>
-                @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;600;700&family=Barlow+Condensed:wght@500;700&display=swap');
-
-                :root {
-                    --bg: #111315;
-                    --panel: #181c20;
-                    --panel-2: #1f252b;
-                    --text: #f2f4f5;
-                    --muted: #a5b0ba;
-                    --accent: #ff6a00;
-                    --accent-2: #ffd166;
-                    --line: #2a3239;
-                }
-
-                .stApp {
-                    background: radial-gradient(circle at 15% 0%, #212932 0%, var(--bg) 45%);
-                    color: var(--text);
-                    font-family: 'Space Grotesk', sans-serif;
-                }
-
-                h1, h2, h3 {
-                    font-family: 'Barlow Condensed', sans-serif;
-                    letter-spacing: 0.04em;
-                    text-transform: uppercase;
-                }
-
-                [data-testid="stSidebar"] {
-                    background: linear-gradient(180deg, #0f1317 0%, #131a20 100%);
-                    border-right: 1px solid var(--line);
-                }
-
-                [data-testid="stSidebar"] h2,
-                [data-testid="stSidebar"] h3,
-                [data-testid="stSidebar"] label,
-                [data-testid="stSidebar"] p,
-                [data-testid="stSidebar"] span {
-                    color: var(--text) !important;
-                }
-
-                .stButton>button {
-                    background: linear-gradient(120deg, var(--accent), #ff8c24);
-                    color: #111315;
-                    border: 0;
-                    border-radius: 8px;
-                    font-weight: 700;
-                    text-transform: uppercase;
-                    letter-spacing: 0.04em;
-                }
-
-                .stExpander {
-                    border: 1px solid var(--line);
-                    border-radius: 10px;
-                    background: rgba(27, 34, 41, 0.7);
-                }
-
-                .jeevy-hero {
-                    background: linear-gradient(135deg, rgba(255,106,0,0.20), rgba(255,209,102,0.10));
-                    border: 1px solid rgba(255,106,0,0.35);
-                    padding: 16px 18px;
-                    border-radius: 12px;
-                    margin-bottom: 14px;
-                }
-
-                .jeevy-hero p {
-                    margin: 0;
-                    color: var(--muted);
-                    font-size: 0.95rem;
-                }
-                </style>
-                """,
-                unsafe_allow_html=True,
-        )
-
-
 def _plot_network_map(sim, title: str, output_dir: Path, filename: str) -> Path:
     shop_by_id = {s.shop_id: s for s in sim.shops}
 
@@ -416,16 +339,8 @@ def _render_images(output_dir: Path):
 
 def main():
     st.set_page_config(page_title="Jeevy Simulation Dashboard", layout="wide")
-    _apply_brand_theme()
     st.title("Jeevy Simulation Dashboard")
-    st.markdown(
-        """
-        <div class="jeevy-hero">
-          <p><strong>Fabrication, re-engineered.</strong> Tune network constraints, run scenarios, and compare capacity outcomes across base, partial, and full-network cases.</p>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+    st.write("Configure parameters on the left, then run simulations and view plots on the right.")
 
     with st.sidebar:
         st.header("Run Controls")
