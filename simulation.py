@@ -5,6 +5,7 @@ simulation.py — Main simulation loop (full-featured mode).
 from __future__ import annotations
 import math
 import numpy as np
+from itertools import permutations, product
 from typing import Optional
 from models import Shop, Job, JobComponent, generate_shops, generate_jobs
 
@@ -69,6 +70,36 @@ def _expected_plan_metrics(comp: JobComponent, plan: list[Shop]) -> tuple[float,
         p_reach_attempt *= max(0.0, 1.0 - float(shop.quality_rate))
 
     return expected_cost, expected_timeline_days
+
+
+def _component_plan_options(
+    comp: JobComponent,
+    primary: Shop,
+    candidate_pool: list[Shop],
+    backup_shop_depth: int,
+    max_plan_options: int = 120,
+) -> list[tuple[list[Shop], float, float]]:
+    """
+    Enumerate bounded backup plans for one component with fixed primary shop.
+    Returns tuples of (plan, expected_cost, expected_timeline_days).
+    """
+    depth = max(1, int(backup_shop_depth))
+    others = [s for s in candidate_pool if s.shop_id != primary.shop_id]
+    max_backups = min(depth - 1, len(others))
+
+    options: list[tuple[list[Shop], float, float]] = []
+    for r in range(0, max_backups + 1):
+        for backup_perm in permutations(others, r):
+            plan = [primary, *backup_perm]
+            combined_quality = _combined_quality_rate(plan)
+            if combined_quality < comp.quality_reliability_target:
+                continue
+            expected_cost, expected_timeline_days = _expected_plan_metrics(comp, plan)
+            options.append((plan, expected_cost, expected_timeline_days))
+
+    # Keep bounded best options by expected timeline then expected cost.
+    options.sort(key=lambda x: (x[2], x[1]))
+    return options[:max_plan_options]
 
 
 def find_best_shop(
@@ -403,37 +434,150 @@ class SimulationRun:
 
     # ------------------------------------------------------------------
     def _allocate_pool(self, day: int):
-        remaining = []
+        remaining: list[JobComponent] = []
+
+        # 1) Handle hard deadline misses immediately.
+        valid_pool: list[JobComponent] = []
         for comp in self.unassigned_pool:
             if comp.days_remaining <= 0:
-                # Deadline passed before allocation
                 comp.timeline_failed = True
                 self._apply_failure_penalty(comp, "timeline")
                 comp.completed = True
                 job = self.jobs[comp.job_id]
                 job.timeline_success = False
+            else:
+                valid_pool.append(comp)
+
+        # 2) Re-allocations still use per-component planner.
+        reallocation_pool = [c for c in valid_pool if c.prev_shop is not None]
+        initial_pool = [c for c in valid_pool if c.prev_shop is None]
+
+        # 3) Initial allocations: evaluate bounded split/shop/backup combinations per job.
+        by_job: dict[int, list[JobComponent]] = {}
+        for comp in initial_pool:
+            by_job.setdefault(comp.job_id, []).append(comp)
+
+        for job_id, comps in by_job.items():
+            comps = sorted(comps, key=lambda c: c.component_id)
+            if not comps:
                 continue
 
-            is_realloc = comp.prev_shop is not None
-            avoid_shop_ids: set[int] = set()
-            if not is_realloc and comp.job_id in self.jobs:
-                for sibling in self.jobs[comp.job_id].components:
-                    if sibling is not comp and sibling.assigned_shop is not None:
-                        avoid_shop_ids.add(sibling.assigned_shop.shop_id)
+            # Available capacity slots today.
+            slots_by_shop: dict[int, int] = {}
+            for shop in self.shops:
+                slots_by_shop[shop.shop_id] = max(0, shop.free_workers - shop.busy_workers_today)
 
+            if sum(slots_by_shop.values()) < len(comps):
+                remaining.extend(comps)
+                continue
+
+            # Bounded candidate pool for combinatorial planning.
+            baseline_comp = comps[0]
+            available_shops = [s for s in self.shops if slots_by_shop.get(s.shop_id, 0) > 0 and s.can_accept(baseline_comp)]
+            if not available_shops:
+                remaining.extend(comps)
+                continue
+
+            available_shops.sort(key=lambda s: _attempt_cost_estimate(baseline_comp, s))
+            candidate_pool = available_shops[: min(8, len(available_shops))]
+
+            # Enumerate bounded primary assignments with capacity feasibility.
+            primary_assignments: list[tuple[Shop, ...]] = []
+            max_primary_assignments = 1200
+
+            def _dfs_primary(idx: int, cur: list[Shop], local_slots: dict[int, int]):
+                if len(primary_assignments) >= max_primary_assignments:
+                    return
+                if idx == len(comps):
+                    primary_assignments.append(tuple(cur))
+                    return
+                for shop in candidate_pool:
+                    sid = shop.shop_id
+                    if local_slots.get(sid, 0) <= 0:
+                        continue
+                    local_slots[sid] -= 1
+                    cur.append(shop)
+                    _dfs_primary(idx + 1, cur, local_slots)
+                    cur.pop()
+                    local_slots[sid] += 1
+
+            _dfs_primary(0, [], dict(slots_by_shop))
+            if not primary_assignments:
+                remaining.extend(comps)
+                continue
+
+            best_choice = None
+            best_key = (float("inf"), float("inf"))
+            min_days_remaining = float(min(c.days_remaining for c in comps))
+
+            for assignment in primary_assignments:
+                per_comp_options: list[list[tuple[list[Shop], float, float]]] = []
+                invalid = False
+                for comp, primary in zip(comps, assignment):
+                    opts = _component_plan_options(
+                        comp=comp,
+                        primary=primary,
+                        candidate_pool=candidate_pool,
+                        backup_shop_depth=self.backup_shop_depth,
+                        max_plan_options=60,
+                    )
+                    if not opts:
+                        invalid = True
+                        break
+                    per_comp_options.append(opts)
+                if invalid:
+                    continue
+
+                # Cartesian product across component plan options, bounded.
+                max_combo_eval = 4000
+                evaluated = 0
+                for combo in product(*per_comp_options):
+                    evaluated += 1
+                    if evaluated > max_combo_eval:
+                        break
+
+                    expected_job_days = max(opt[2] for opt in combo)
+                    expected_days_late = max(0.0, expected_job_days - min_days_remaining)
+
+                    # Delay-centric objective requested by user.
+                    cost_of_being_late = 0.0
+                    total_expected_cost = 0.0
+                    for comp, opt in zip(comps, combo):
+                        expected_cost = opt[1]
+                        total_expected_cost += expected_cost
+                        cost_of_being_late += expected_cost * max(0.0, comp.late_penalty_per_day)
+
+                    delay_cost = expected_days_late * cost_of_being_late
+                    key = (delay_cost, total_expected_cost)
+                    if key < best_key:
+                        best_key = key
+                        best_choice = (assignment, combo)
+
+            if best_choice is None:
+                remaining.extend(comps)
+                continue
+
+            assignment, combo = best_choice
+            for comp, primary, opt in zip(comps, assignment, combo):
+                allocate_component(comp, primary, day, False, self.shops, self.num_quality_checks)
+                # Keep selected plan for debugging/inspection.
+                comp.selected_backup_plan = [s.shop_id for s in opt[0]]
+                self.active_components.append(comp)
+
+        # 4) Re-allocation path (single component at a time).
+        for comp in reallocation_pool:
             best = find_best_shop(
                 comp,
                 self.shops,
                 self.rng,
-                avoid_shop_ids=avoid_shop_ids,
+                avoid_shop_ids={comp.prev_shop.shop_id} if comp.prev_shop is not None else set(),
                 backup_shop_depth=self.backup_shop_depth,
                 max_delay_factor=self.max_delay_factor,
             )
             if best is None:
-                # No suitable shop found; try again next day
                 remaining.append(comp)
             else:
-                allocate_component(comp, best, day, is_realloc, self.shops, self.num_quality_checks)
+                allocate_component(comp, best, day, True, self.shops, self.num_quality_checks)
                 self.active_components.append(comp)
 
         self.unassigned_pool = remaining
