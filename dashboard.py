@@ -26,7 +26,13 @@ from models import DEFAULT_JOB_CONFIG, SHOP_TYPE_PARAMS
 HUB_LOCATION = (0.5, 0.5)
 
 
-def _plot_network_map(sim, title: str, output_dir: Path, filename: str) -> Path:
+def _plot_network_map(
+    sim,
+    title: str,
+    output_dir: Path,
+    filename: str,
+    text_overrides: Optional[dict[str, str]] = None,
+) -> Path:
     shop_by_id = {s.shop_id: s for s in sim.shops}
 
     fig, ax = plt.subplots(figsize=(9, 7))
@@ -110,11 +116,16 @@ def _plot_network_map(sim, title: str, output_dir: Path, filename: str) -> Path:
     # Hub marker.
     ax.scatter([HUB_LOCATION[0]], [HUB_LOCATION[1]], s=135, c="#0B4F8C", marker="*", label="Quality hub")
 
-    ax.set_title(title, color="#0B2A44", fontsize=18, fontweight="bold")
+    ax.set_title(text_overrides.get(title, title) if text_overrides else title, color="#0B2A44", fontsize=18, fontweight="bold")
     ax.set_xlim(0, 1)
     ax.set_ylim(0, 1)
-    ax.set_xlabel("X Location", color="#0B2A44", fontsize=13)
-    ax.set_ylabel("Y Location", color="#0B2A44", fontsize=13)
+    x_label = "X Location"
+    y_label = "Y Location"
+    if text_overrides:
+        x_label = text_overrides.get(x_label, x_label)
+        y_label = text_overrides.get(y_label, y_label)
+    ax.set_xlabel(x_label, color="#0B2A44", fontsize=13)
+    ax.set_ylabel(y_label, color="#0B2A44", fontsize=13)
     ax.tick_params(colors="#16324A", labelsize=11)
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(False)
@@ -142,7 +153,8 @@ def _collect_settings(case_mode, runs, shops, days, jobs_per_day, seed,
                        quality_checks, max_delay_factor, failure_penalty_rate, backup_shop_depth,
                        use_util_overrides, capacity_utilization_mean, capacity_utilization_std,
                        job_generation_mode, job_generation_probability,
-                       output_base, shop_type_params_override, job_config_override) -> dict:
+                       output_base, shop_type_params_override, job_config_override,
+                       plot_text_overrides) -> dict:
     return {
         "case_mode": case_mode,
         "runs": int(runs),
@@ -162,7 +174,18 @@ def _collect_settings(case_mode, runs, shops, days, jobs_per_day, seed,
         "output_base": output_base,
         "shop_type_params_override": shop_type_params_override,
         "job_config_override": job_config_override,
+        "plot_text_overrides": plot_text_overrides,
     }
+
+
+def _parse_plot_text_overrides(raw_text: str) -> dict[str, str]:
+    text = (raw_text or "").strip()
+    if not text:
+        return {}
+    parsed = json.loads(text)
+    if not isinstance(parsed, dict):
+        raise ValueError("Plot text overrides must be a JSON object mapping existing text to replacement text.")
+    return {str(k): str(v) for k, v in parsed.items()}
 
 
 def _d(key: str, default):
@@ -363,6 +386,7 @@ def _run_primary(
     shop_type_params_override: Optional[dict[str, dict]],
     job_config: Optional[dict],
     output_dir: str,
+    text_overrides: Optional[dict[str, str]] = None,
 ) -> tuple[dict, list[SimulationRun]]:
     all_stats = []
     run_sims: list[SimulationRun] = []
@@ -389,9 +413,9 @@ def _run_primary(
         run_sims.append(sim)
 
     agg = aggregate_runs(all_stats)
-    plot_shop_statistics(agg, output_dir=output_dir, label="Primary")
-    plot_job_statistics(agg, output_dir=output_dir, label="Primary")
-    plot_success_rates_vs_targets(agg, output_dir=output_dir, label="Primary")
+    plot_shop_statistics(agg, output_dir=output_dir, label="Primary", text_overrides=text_overrides)
+    plot_job_statistics(agg, output_dir=output_dir, label="Primary", text_overrides=text_overrides)
+    plot_success_rates_vs_targets(agg, output_dir=output_dir, label="Primary", text_overrides=text_overrides)
     return agg, run_sims
 
 
@@ -412,6 +436,7 @@ def _run_secondary(
     job_config: Optional[dict],
     output_dir: str,
     methods: tuple[str, ...] = ("random_cheapest", "quality_top"),
+    text_overrides: Optional[dict[str, str]] = None,
 ) -> dict[str, dict[str, object]]:
     results: dict[str, dict[str, object]] = {}
     for method in methods:
@@ -443,9 +468,9 @@ def _run_secondary(
         agg = aggregate_runs(all_stats)
         results[method] = {"agg": agg, "sim": exemplar_sim}
         label = "BaseCase" if method == "random_cheapest" else "PartialNetwork"
-        plot_shop_statistics(agg, output_dir=output_dir, label=label)
-        plot_job_statistics(agg, output_dir=output_dir, label=label)
-        plot_success_rates_vs_targets(agg, output_dir=output_dir, label=label)
+        plot_shop_statistics(agg, output_dir=output_dir, label=label, text_overrides=text_overrides)
+        plot_job_statistics(agg, output_dir=output_dir, label=label, text_overrides=text_overrides)
+        plot_success_rates_vs_targets(agg, output_dir=output_dir, label=label, text_overrides=text_overrides)
 
     return results
 
@@ -539,6 +564,28 @@ def main():
 
         output_base = st.text_input("Output Base Directory", value="dashboard_runs")
 
+        st.subheader("Plot Text")
+        default_plot_text = _d("plot_text_overrides", {})
+        default_plot_text_json = json.dumps(default_plot_text, indent=2) if isinstance(default_plot_text, dict) else "{}"
+        plot_text_overrides_raw = st.text_area(
+            "Title/Axis Label Overrides (JSON)",
+            value=default_plot_text_json,
+            height=160,
+            help=(
+                "Map existing chart text to replacement text. Example:\n"
+                "{\n"
+                "  \"Quality Success Rate\": \"Quality Rate\",\n"
+                "  \"Rate\": \"Probability\",\n"
+                "  \"X Location\": \"Longitude\"\n"
+                "}"
+            ),
+        )
+        plot_text_overrides: dict[str, str] = {}
+        try:
+            plot_text_overrides = _parse_plot_text_overrides(plot_text_overrides_raw)
+        except Exception as exc:
+            st.warning(f"Invalid plot text override JSON. Using defaults. ({exc})")
+
         shop_type_params_override = _shop_params_controls()
         job_config_override, selected_job_types = _job_config_controls(max_days=int(days))
 
@@ -580,6 +627,7 @@ def main():
                     use_util_overrides, capacity_utilization_mean, capacity_utilization_std,
                     job_generation_mode, job_generation_probability,
                     output_base, shop_type_params_override, job_config_override,
+                    plot_text_overrides,
                 )
                 path = _settings_dir() / f"{settings_name.strip() or 'settings'}.json"
                 path.write_text(json.dumps(snap, indent=2))
@@ -591,6 +639,7 @@ def main():
                 use_util_overrides, capacity_utilization_mean, capacity_utilization_std,
                 job_generation_mode, job_generation_probability,
                 output_base, shop_type_params_override, job_config_override,
+                plot_text_overrides,
             )
             st.download_button(
                 "📥 Export JSON",
@@ -656,11 +705,12 @@ def main():
                             shop_type_params_override=shop_type_params_override,
                             job_config=job_config_override,
                             output_dir=str(output_dir),
+                            text_overrides=plot_text_overrides,
                         )
                         # Re-label primary figures to match dashboard terminology.
-                        plot_shop_statistics(agg_primary, output_dir=str(output_dir), label="FullNetwork")
-                        plot_job_statistics(agg_primary, output_dir=str(output_dir), label="FullNetwork")
-                        plot_success_rates_vs_targets(agg_primary, output_dir=str(output_dir), label="FullNetwork")
+                        plot_shop_statistics(agg_primary, output_dir=str(output_dir), label="FullNetwork", text_overrides=plot_text_overrides)
+                        plot_job_statistics(agg_primary, output_dir=str(output_dir), label="FullNetwork", text_overrides=plot_text_overrides)
+                        plot_success_rates_vs_targets(agg_primary, output_dir=str(output_dir), label="FullNetwork", text_overrides=plot_text_overrides)
                         for idx, sim in enumerate(primary_sims, start=1):
                             map_paths.append(
                                 _plot_network_map(
@@ -668,6 +718,7 @@ def main():
                                     f"Full Network Flow Map (run {idx})",
                                     output_dir,
                                     f"network_map_full_network_run_{idx}.png",
+                                    text_overrides=plot_text_overrides,
                                 )
                             )
 
@@ -695,20 +746,21 @@ def main():
                             job_config=job_config_override,
                             output_dir=str(output_dir),
                             methods=methods,
+                            text_overrides=plot_text_overrides,
                         )
                         # Generate plots for secondary simulation results
                         if case_mode == "base case":
                             base_agg = agg_secondary.get("random_cheapest", {}).get("agg")
                             if base_agg:
-                                plot_shop_statistics(base_agg, output_dir=str(output_dir), label="BaseCase")
-                                plot_job_statistics(base_agg, output_dir=str(output_dir), label="BaseCase")
-                                plot_success_rates_vs_targets(base_agg, output_dir=str(output_dir), label="BaseCase")
+                                plot_shop_statistics(base_agg, output_dir=str(output_dir), label="BaseCase", text_overrides=plot_text_overrides)
+                                plot_job_statistics(base_agg, output_dir=str(output_dir), label="BaseCase", text_overrides=plot_text_overrides)
+                                plot_success_rates_vs_targets(base_agg, output_dir=str(output_dir), label="BaseCase", text_overrides=plot_text_overrides)
                         elif case_mode == "partial network":
                             partial_agg = agg_secondary.get("quality_top", {}).get("agg")
                             if partial_agg:
-                                plot_shop_statistics(partial_agg, output_dir=str(output_dir), label="PartialNetwork")
-                                plot_job_statistics(partial_agg, output_dir=str(output_dir), label="PartialNetwork")
-                                plot_success_rates_vs_targets(partial_agg, output_dir=str(output_dir), label="PartialNetwork")
+                                plot_shop_statistics(partial_agg, output_dir=str(output_dir), label="PartialNetwork", text_overrides=plot_text_overrides)
+                                plot_job_statistics(partial_agg, output_dir=str(output_dir), label="PartialNetwork", text_overrides=plot_text_overrides)
+                                plot_success_rates_vs_targets(partial_agg, output_dir=str(output_dir), label="PartialNetwork", text_overrides=plot_text_overrides)
 
                     if (
                         case_mode == "all cases"
@@ -722,24 +774,28 @@ def main():
                             agg_secondary_rand=agg_secondary["random_cheapest"]["agg"],
                             agg_secondary_qual=agg_secondary["quality_top"]["agg"],
                             output_dir=str(output_dir),
+                            text_overrides=plot_text_overrides,
                         )
                         plot_job_cost_comparison(
                             agg_primary=agg_primary,
                             agg_secondary_rand=agg_secondary["random_cheapest"]["agg"],
                             agg_secondary_qual=agg_secondary["quality_top"]["agg"],
                             output_dir=str(output_dir),
+                            text_overrides=plot_text_overrides,
                         )
                         plot_shop_comparison(
                             agg_primary=agg_primary,
                             agg_secondary_rand=agg_secondary["random_cheapest"]["agg"],
                             agg_secondary_qual=agg_secondary["quality_top"]["agg"],
                             output_dir=str(output_dir),
+                            text_overrides=plot_text_overrides,
                         )
                         plot_mode_operational_comparison(
                             agg_primary=agg_primary,
                             agg_secondary_rand=agg_secondary["random_cheapest"]["agg"],
                             agg_secondary_qual=agg_secondary["quality_top"]["agg"],
                             output_dir=str(output_dir),
+                            text_overrides=plot_text_overrides,
                         )
 
                 st.session_state["last_output_dir"] = str(output_dir)

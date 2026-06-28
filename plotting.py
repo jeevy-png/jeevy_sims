@@ -45,7 +45,29 @@ def _smooth(arr: np.ndarray, window: int = 7) -> np.ndarray:
     return np.convolve(arr, kernel, mode="same")
 
 
-def plot_shop_statistics(agg: dict, output_dir: str = ".", label: str = ""):
+def _apply_text_overrides(fig, text_overrides: dict[str, str] | None = None):
+    if not text_overrides:
+        return
+
+    for ax in fig.axes:
+        title = ax.get_title()
+        xlabel = ax.get_xlabel()
+        ylabel = ax.get_ylabel()
+        if title in text_overrides:
+            ax.set_title(text_overrides[title])
+        if xlabel in text_overrides:
+            ax.set_xlabel(text_overrides[xlabel])
+        if ylabel in text_overrides:
+            ax.set_ylabel(text_overrides[ylabel])
+
+    # Includes figure-level text such as suptitle.
+    for txt in fig.texts:
+        original = txt.get_text()
+        if original in text_overrides:
+            txt.set_text(text_overrides[original])
+
+
+def plot_shop_statistics(agg: dict, output_dir: str = ".", label: str = "", text_overrides: dict[str, str] | None = None):
     """
     Four subplots:
       1. Mean daily capacity fraction per shop type
@@ -118,6 +140,7 @@ def plot_shop_statistics(agg: dict, output_dir: str = ".", label: str = ""):
     ax.set_ylabel("Profit Variance ($ squared)", fontsize=13, color="#0B2A44")
     _style_axis(ax, grid_y=True)
 
+    _apply_text_overrides(fig, text_overrides)
     plt.tight_layout()
     fname = out / f"shop_statistics{'_' + label if label else ''}.png"
     plt.savefig(fname, dpi=150, bbox_inches="tight")
@@ -125,7 +148,7 @@ def plot_shop_statistics(agg: dict, output_dir: str = ".", label: str = ""):
     print(f"Saved: {fname}")
 
 
-def plot_job_statistics(agg: dict, output_dir: str = ".", label: str = ""):
+def plot_job_statistics(agg: dict, output_dir: str = ".", label: str = "", text_overrides: dict[str, str] | None = None):
     """
     Four subplots:
       1. Mean total cost per job type
@@ -200,6 +223,7 @@ def plot_job_statistics(agg: dict, output_dir: str = ".", label: str = ""):
     ax.legend(fontsize=10, frameon=False)
     _style_axis(ax, grid_y=True)
 
+    _apply_text_overrides(fig, text_overrides)
     plt.tight_layout()
     fname = out / f"job_statistics{'_' + label if label else ''}.png"
     plt.savefig(fname, dpi=150, bbox_inches="tight")
@@ -207,7 +231,7 @@ def plot_job_statistics(agg: dict, output_dir: str = ".", label: str = ""):
     print(f"Saved: {fname}")
 
 
-def plot_success_rates_vs_targets(agg: dict, output_dir: str = ".", label: str = ""):
+def plot_success_rates_vs_targets(agg: dict, output_dir: str = ".", label: str = "", text_overrides: dict[str, str] | None = None):
     """
     Scatter: actual success rate vs. required target, for quality and timeline.
     """
@@ -244,6 +268,7 @@ def plot_success_rates_vs_targets(agg: dict, output_dir: str = ".", label: str =
         ax.legend(fontsize=10, frameon=False)
         _style_axis(ax, grid_y=False)
 
+    _apply_text_overrides(fig, text_overrides)
     plt.tight_layout()
     fname = out / f"success_vs_targets{'_' + label if label else ''}.png"
     plt.savefig(fname, dpi=150, bbox_inches="tight")
@@ -252,7 +277,7 @@ def plot_success_rates_vs_targets(agg: dict, output_dir: str = ".", label: str =
 
 
 def plot_comparison(agg_primary: dict, agg_secondary_rand: dict, agg_secondary_qual: dict,
-                    output_dir: str = "."):
+                    output_dir: str = ".", text_overrides: dict[str, str] | None = None):
     """Side-by-side quality and timeline success rate comparison across three modes."""
     out = Path(output_dir)
     out.mkdir(parents=True, exist_ok=True)
@@ -291,6 +316,7 @@ def plot_comparison(agg_primary: dict, agg_secondary_rand: dict, agg_secondary_q
         ax.legend(fontsize=10, frameon=False)
         _style_axis(ax, grid_y=True)
 
+    _apply_text_overrides(fig, text_overrides)
     plt.tight_layout()
     fname = out / "mode_comparison.png"
     plt.savefig(fname, dpi=150, bbox_inches="tight")
@@ -299,7 +325,7 @@ def plot_comparison(agg_primary: dict, agg_secondary_rand: dict, agg_secondary_q
 
 
 def plot_shop_comparison(agg_primary: dict, agg_secondary_rand: dict, agg_secondary_qual: dict,
-                         output_dir: str = "."):
+                         output_dir: str = ".", text_overrides: dict[str, str] | None = None):
     """
     Combined 4x3 grid comparing shop statistics across all three modes.
     Rows: capacity fraction | daily profit | total profit mean | total profit variance
@@ -383,6 +409,7 @@ def plot_shop_comparison(agg_primary: dict, agg_secondary_rand: dict, agg_second
             ax.set_ylabel(row_titles[3], fontsize=12, color="#0B2A44")
         _style_axis(ax, grid_y=True)
 
+    _apply_text_overrides(fig, text_overrides)
     plt.tight_layout(rect=[0, 0, 1, 0.97])
     fname = out / "shop_comparison_all_modes.png"
     plt.savefig(fname, dpi=150, bbox_inches="tight")
@@ -391,7 +418,7 @@ def plot_shop_comparison(agg_primary: dict, agg_secondary_rand: dict, agg_second
 
 
 def plot_job_cost_comparison(agg_primary: dict, agg_secondary_rand: dict, agg_secondary_qual: dict,
-                              output_dir: str = "."):
+                              output_dir: str = ".", text_overrides: dict[str, str] | None = None):
     """
     Two-panel figure comparing job costs across all three simulation modes.
 
@@ -460,6 +487,7 @@ def plot_job_cost_comparison(agg_primary: dict, agg_secondary_rand: dict, agg_se
     ax.legend(fontsize=10, frameon=False)
     _style_axis(ax, grid_y=True)
 
+    _apply_text_overrides(fig, text_overrides)
     plt.tight_layout()
     fname = out / "job_cost_comparison.png"
     plt.savefig(fname, dpi=150, bbox_inches="tight")
@@ -468,7 +496,7 @@ def plot_job_cost_comparison(agg_primary: dict, agg_secondary_rand: dict, agg_se
 
 
 def plot_mode_operational_comparison(agg_primary: dict, agg_secondary_rand: dict, agg_secondary_qual: dict,
-                                     output_dir: str = "."):
+                                     output_dir: str = ".", text_overrides: dict[str, str] | None = None):
     """
     Compare operational behavior across modes.
 
@@ -518,6 +546,7 @@ def plot_mode_operational_comparison(agg_primary: dict, agg_secondary_rand: dict
         ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() * 1.01 + 0.01,
                 f"{value:.2f}", ha="center", va="bottom", fontsize=8)
 
+    _apply_text_overrides(fig, text_overrides)
     plt.tight_layout()
     fname = out / "mode_operational_comparison.png"
     plt.savefig(fname, dpi=150, bbox_inches="tight")
