@@ -35,10 +35,7 @@ def _style_axis(ax, grid_y: bool = False):
     ax.spines["left"].set_color("#D4DDE6")
     ax.spines["bottom"].set_color("#D4DDE6")
     ax.tick_params(labelsize=11, colors="#16324A")
-    if grid_y:
-        ax.grid(True, axis="y", color="#E8EFF6", linewidth=0.9)
-    else:
-        ax.grid(False)
+    ax.grid(False)
 
 
 def _smooth(arr: np.ndarray, window: int = 7) -> np.ndarray:
