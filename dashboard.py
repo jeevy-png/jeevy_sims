@@ -152,7 +152,7 @@ def _settings_dir() -> Path:
 def _collect_settings(case_mode, runs, shops, days, jobs_per_day, seed,
                        quality_checks, max_delay_factor, failure_penalty_rate, backup_shop_depth,
                        use_util_overrides, capacity_utilization_mean, capacity_utilization_std,
-                       job_generation_mode, job_generation_probability,
+                       job_generation_mode, job_generation_probability, job_generation_days,
                        output_base, shop_type_params_override, job_config_override,
                        plot_text_overrides) -> dict:
     return {
@@ -171,11 +171,86 @@ def _collect_settings(case_mode, runs, shops, days, jobs_per_day, seed,
         "capacity_utilization_std": capacity_utilization_std,
         "job_generation_mode": job_generation_mode,
         "job_generation_probability": float(job_generation_probability),
+        "job_generation_days": [int(d) for d in (job_generation_days or [0])],
         "output_base": output_base,
         "shop_type_params_override": shop_type_params_override,
         "job_config_override": job_config_override,
         "plot_text_overrides": plot_text_overrides,
     }
+
+
+def _apply_loaded_settings_to_session_state(loaded: dict):
+    st.session_state["_loaded_settings"] = loaded
+
+    key_map = {
+        "case_mode": "case_mode",
+        "runs": "runs",
+        "shops": "shops",
+        "days": "days",
+        "jobs_per_day": "jobs_per_day",
+        "seed": "seed",
+        "quality_checks": "quality_checks",
+        "max_delay_factor": "max_delay_factor",
+        "failure_penalty_rate": "failure_penalty_rate",
+        "backup_shop_depth": "backup_shop_depth",
+        "use_util_overrides": "use_util_overrides",
+        "capacity_utilization_mean": "capacity_utilization_mean",
+        "capacity_utilization_std": "capacity_utilization_std",
+        "job_generation_mode": "job_generation_mode",
+        "job_generation_probability": "job_generation_probability",
+        "output_base": "output_base",
+    }
+    for src, dst in key_map.items():
+        if src in loaded:
+            st.session_state[dst] = loaded[src]
+
+    if "job_generation_days" in loaded:
+        st.session_state["custom_generation_days"] = [int(d) for d in loaded.get("job_generation_days", [0])]
+
+    if "plot_text_overrides" in loaded:
+        st.session_state["plot_text_overrides_raw"] = json.dumps(loaded.get("plot_text_overrides", {}), indent=2)
+
+    shop_overrides = loaded.get("shop_type_params_override", {}) or {}
+    for shop_type, params in shop_overrides.items():
+        if not isinstance(params, dict):
+            continue
+        for param_name, param_value in params.items():
+            st.session_state[f"{shop_type}_{param_name}"] = param_value
+
+    job_cfg = loaded.get("job_config_override", {}) or {}
+    if isinstance(job_cfg, dict):
+        scalar_job_keys = [
+            "job_type_min_index", "job_type_max_index", "num_components_divisor",
+            "deadline_base", "deadline_step", "capacity_base", "capacity_step",
+            "max_workers", "quality_cost_base", "quality_cost_step",
+            "material_cost_base", "material_cost_step", "max_daily_manhours_per_worker",
+            "base_labor_rate_base", "base_labor_rate_step",
+            "base_transportation_cost_base", "base_transportation_cost_step",
+            "late_penalty_per_day_base", "late_penalty_per_day_step",
+            "timeline_reliability_target_base", "timeline_reliability_target_step",
+            "quality_reliability_target_base", "quality_reliability_target_step",
+        ]
+        for key in scalar_job_keys:
+            if key in job_cfg:
+                st.session_state[key] = job_cfg[key]
+
+        indices = job_cfg.get("job_type_indices", [])
+        if indices:
+            st.session_state["job_type_selection_mode"] = "explicit"
+            st.session_state["job_type_indices"] = [int(x) for x in indices]
+        else:
+            st.session_state["job_type_selection_mode"] = "range"
+
+        overrides = job_cfg.get("job_type_overrides", {}) or {}
+        if isinstance(overrides, dict):
+            override_types = sorted(int(k) for k in overrides.keys())
+            st.session_state["job_override_types"] = override_types
+            for jt_str, params in overrides.items():
+                if not isinstance(params, dict):
+                    continue
+                jt = int(jt_str)
+                for param_name, param_value in params.items():
+                    st.session_state[f"job_{jt}_{param_name}"] = param_value
 
 
 def _parse_plot_text_overrides(raw_text: str) -> dict[str, str]:
@@ -509,6 +584,11 @@ def _quality_audit_rows(label: str, agg: Optional[dict]) -> list[dict]:
 
 def main():
     st.set_page_config(page_title="Jeevy Simulation Dashboard", layout="wide")
+
+    pending = st.session_state.pop("_pending_loaded_settings", None)
+    if pending is not None:
+        _apply_loaded_settings_to_session_state(pending)
+
     st.title("Jeevy Simulation Dashboard")
     st.write("Configure parameters on the left, then run simulations and view plots on the right.")
 
@@ -517,33 +597,35 @@ def main():
         case_mode = st.selectbox(
             "Case",
             ["base case", "partial network", "full network", "all cases"],
-            index=0,
+            index=["base case", "partial network", "full network", "all cases"].index(_d("case_mode", "base case")) if _d("case_mode", "base case") in ["base case", "partial network", "full network", "all cases"] else 0,
+            key="case_mode",
         )
-        runs = st.number_input("Runs", min_value=1, max_value=200, value=3, step=1)
-        shops = st.number_input("Shops", min_value=1, max_value=2000, value=100, step=1)
-        days = st.number_input("Days", min_value=1, max_value=3650, value=365, step=1)
-        jobs_per_day = st.number_input("Jobs Generated Per Event", min_value=1, max_value=1000, value=5, step=1)
-        seed = st.number_input("Base Seed", min_value=0, max_value=2_000_000_000, value=42, step=1)
+        runs = st.number_input("Runs", min_value=1, max_value=200, value=int(_d("runs", 3)), step=1, key="runs")
+        shops = st.number_input("Shops", min_value=1, max_value=2000, value=int(_d("shops", 100)), step=1, key="shops")
+        days = st.number_input("Days", min_value=1, max_value=3650, value=int(_d("days", 365)), step=1, key="days")
+        jobs_per_day = st.number_input("Jobs Generated Per Event", min_value=1, max_value=1000, value=int(_d("jobs_per_day", 5)), step=1, key="jobs_per_day")
+        seed = st.number_input("Base Seed", min_value=0, max_value=2_000_000_000, value=int(_d("seed", 42)), step=1, key="seed")
 
         st.subheader("Quality / Delay")
-        quality_checks = st.number_input("Quality Checks (Primary)", min_value=1, max_value=20, value=3, step=1)
-        max_delay_factor = st.number_input("Max Delay Factor", min_value=0.0, max_value=10.0, value=1.0, step=0.1)
-        failure_penalty_rate = st.number_input("Failure Penalty Rate", min_value=0.0, max_value=5.0, value=0.20, step=0.01)
-        backup_shop_depth = st.number_input("Primary Backup Shop Depth", min_value=1, max_value=6, value=int(_d("backup_shop_depth", 3)), step=1)
+        quality_checks = st.number_input("Quality Checks (Primary)", min_value=1, max_value=20, value=int(_d("quality_checks", 3)), step=1, key="quality_checks")
+        max_delay_factor = st.number_input("Max Delay Factor", min_value=0.0, max_value=10.0, value=float(_d("max_delay_factor", 1.0)), step=0.1, key="max_delay_factor")
+        failure_penalty_rate = st.number_input("Failure Penalty Rate", min_value=0.0, max_value=5.0, value=float(_d("failure_penalty_rate", 0.20)), step=0.01, key="failure_penalty_rate")
+        backup_shop_depth = st.number_input("Primary Backup Shop Depth", min_value=1, max_value=6, value=int(_d("backup_shop_depth", 3)), step=1, key="backup_shop_depth")
 
         st.subheader("Capacity Utilization")
-        use_util_overrides = st.checkbox("Override Utilization Mean/Std for all shop types", value=False)
+        use_util_overrides = st.checkbox("Override Utilization Mean/Std for all shop types", value=bool(_d("use_util_overrides", False)), key="use_util_overrides")
         capacity_utilization_mean = None
         capacity_utilization_std = None
         if use_util_overrides:
-            capacity_utilization_mean = st.number_input("Capacity Utilization Mean", min_value=0.0, max_value=1.0, value=0.10, step=0.01)
-            capacity_utilization_std = st.number_input("Capacity Utilization Std Dev", min_value=0.0, max_value=1.0, value=0.02, step=0.01)
+            capacity_utilization_mean = st.number_input("Capacity Utilization Mean", min_value=0.0, max_value=1.0, value=float(_d("capacity_utilization_mean", 0.10)), step=0.01, key="capacity_utilization_mean")
+            capacity_utilization_std = st.number_input("Capacity Utilization Std Dev", min_value=0.0, max_value=1.0, value=float(_d("capacity_utilization_std", 0.02)), step=0.01, key="capacity_utilization_std")
 
         st.subheader("Job Generation")
         job_generation_mode = st.selectbox(
             "Job Generation Mode",
             ["start_only", "daily", "probabilistic", "custom_days"],
-            index=0,
+            index=["start_only", "daily", "probabilistic", "custom_days"].index(_d("job_generation_mode", "start_only")) if _d("job_generation_mode", "start_only") in ["start_only", "daily", "probabilistic", "custom_days"] else 0,
+            key="job_generation_mode",
         )
         job_generation_probability = 0.0
         custom_days_selection = [0]
@@ -552,17 +634,21 @@ def main():
                 "Generation Probability Per Day",
                 min_value=0.0,
                 max_value=1.0,
-                value=0.10,
+                value=float(_d("job_generation_probability", 0.10)),
                 step=0.01,
+                key="job_generation_probability",
             )
         if job_generation_mode == "custom_days":
             day_options = list(range(int(days)))
-            default_days = [0] if int(days) > 0 else []
-            custom_days_selection = st.multiselect("Custom generation days", options=day_options, default=default_days)
+            loaded_days = _d("job_generation_days", [0])
+            default_days = [int(d) for d in loaded_days if 0 <= int(d) < int(days)] if int(days) > 0 else []
+            if not default_days and int(days) > 0:
+                default_days = [0]
+            custom_days_selection = st.multiselect("Custom generation days", options=day_options, default=default_days, key="custom_generation_days")
             if not custom_days_selection:
                 custom_days_selection = [0]
 
-        output_base = st.text_input("Output Base Directory", value="dashboard_runs")
+        output_base = st.text_input("Output Base Directory", value=str(_d("output_base", "dashboard_runs")), key="output_base")
 
         st.subheader("Plot Text")
         default_plot_text = _d("plot_text_overrides", {})
@@ -571,6 +657,7 @@ def main():
             "Title/Axis Label Overrides (JSON)",
             value=default_plot_text_json,
             height=160,
+            key="plot_text_overrides_raw",
             help=(
                 "Map existing chart text to replacement text. Example:\n"
                 "{\n"
@@ -625,7 +712,7 @@ def main():
                     case_mode, runs, shops, days, jobs_per_day, seed,
                     quality_checks, max_delay_factor, failure_penalty_rate, backup_shop_depth,
                     use_util_overrides, capacity_utilization_mean, capacity_utilization_std,
-                    job_generation_mode, job_generation_probability,
+                    job_generation_mode, job_generation_probability, custom_days_selection,
                     output_base, shop_type_params_override, job_config_override,
                     plot_text_overrides,
                 )
@@ -637,7 +724,7 @@ def main():
                 case_mode, runs, shops, days, jobs_per_day, seed,
                 quality_checks, max_delay_factor, failure_penalty_rate, backup_shop_depth,
                 use_util_overrides, capacity_utilization_mean, capacity_utilization_std,
-                job_generation_mode, job_generation_probability,
+                job_generation_mode, job_generation_probability, custom_days_selection,
                 output_base, shop_type_params_override, job_config_override,
                 plot_text_overrides,
             )
@@ -652,8 +739,8 @@ def main():
         uploaded = st.file_uploader("📤 Import settings JSON", type="json", key="settings_uploader")
         if uploaded is not None:
             loaded = json.loads(uploaded.read())
-            st.session_state["_loaded_settings"] = loaded
-            st.success("Settings loaded — they will apply on next page interaction.")
+            st.session_state["_pending_loaded_settings"] = loaded
+            st.rerun()
 
         saved_files = sorted(_settings_dir().glob("*.json"))
         if saved_files:
@@ -664,8 +751,8 @@ def main():
             )
             if chosen != "— select —":
                 loaded = json.loads((_settings_dir() / f"{chosen}.json").read_text())
-                st.session_state["_loaded_settings"] = loaded
-                st.success(f"Loaded '{chosen}' — settings will apply on next page interaction.")
+                st.session_state["_pending_loaded_settings"] = loaded
+                st.rerun()
 
     with right_col:
         st.subheader("Plots")
