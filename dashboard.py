@@ -754,9 +754,12 @@ def main():
         map_paths = st.session_state.get("last_map_paths", [])
         if map_paths:
             st.subheader("Network Travel Maps")
-            run_index = st.slider("Network map run", min_value=1, max_value=len(map_paths), value=len(map_paths), step=1)
-            selected = map_paths[run_index - 1]
-            st.image(selected, caption=f"Run {run_index}: {Path(selected).name}", use_container_width=True)
+            if len(map_paths) > 1:
+                run_index = st.slider("Network map run", min_value=1, max_value=len(map_paths), value=len(map_paths), step=1)
+                selected = map_paths[run_index - 1]
+                st.image(selected, caption=f"Run {run_index}: {Path(selected).name}", use_container_width=True)
+            else:
+                st.image(map_paths[0], caption=f"Run 1: {Path(map_paths[0]).name}", use_container_width=True)
 
         last_output_dir = st.session_state.get("last_output_dir")
         if last_output_dir:
