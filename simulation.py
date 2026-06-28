@@ -231,6 +231,7 @@ class SimulationRun:
         shop_type_params_override: Optional[dict[str, dict]] = None,
         job_config: Optional[dict] = None,
         backup_shop_depth: int = 3,
+        allocation_planner_mode: str = "fast",
     ):
         self.num_shops = num_shops
         self.num_days = num_days
@@ -246,6 +247,7 @@ class SimulationRun:
         self.shop_type_params_override = shop_type_params_override
         self.job_config = job_config
         self.backup_shop_depth = max(1, int(backup_shop_depth))
+        self.allocation_planner_mode = allocation_planner_mode if allocation_planner_mode in ("fast", "thorough") else "fast"
         self.rng = np.random.default_rng(rng_seed)
 
         # State
@@ -396,7 +398,7 @@ class SimulationRun:
         """Returns True if component should be re-routed, False if it should continue."""
         comp.quality_failure_count += 1
         elapsed = comp.deadline_days - comp.days_remaining
-        if elapsed <= comp.max_delay and self._can_reroute_now(comp, shop):
+        if elapsed <= comp.max_delay:
             comp.manhours_done *= 0.7
             comp.quality_checks_done = 0
             comp.compute_quality_check_thresholds(
@@ -406,6 +408,7 @@ class SimulationRun:
             )
             return True
 
+        # Only mark final quality failure when max-delay window is exceeded.
         comp.quality_failed = True
         self._apply_failure_penalty(comp, "quality")
         self.jobs[comp.job_id].quality_success = False
@@ -442,6 +445,23 @@ class SimulationRun:
     # ------------------------------------------------------------------
     def _allocate_pool(self, day: int):
         remaining: list[JobComponent] = []
+
+        # Planner caps: thorough explores more combinations at higher runtime cost.
+        planner_caps = {
+            "fast": {
+                "candidate_pool_base": 6,
+                "primary_assignments_base": 240,
+                "per_component_plan_options": 18,
+                "combo_eval_base": 900,
+            },
+            "thorough": {
+                "candidate_pool_base": 10,
+                "primary_assignments_base": 1200,
+                "per_component_plan_options": 40,
+                "combo_eval_base": 4000,
+            },
+        }
+        caps = planner_caps[self.allocation_planner_mode]
 
         # 1) Handle hard deadline misses immediately.
         valid_pool: list[JobComponent] = []
@@ -487,12 +507,12 @@ class SimulationRun:
 
             available_shops.sort(key=lambda s: _attempt_cost_estimate(baseline_comp, s))
             # Keep combinatorics manageable while preserving diversity.
-            candidate_pool_size = min(len(available_shops), max(4, min(6, len(comps) + 2)))
+            candidate_pool_size = min(len(available_shops), max(4, min(caps["candidate_pool_base"], len(comps) + 2)))
             candidate_pool = available_shops[:candidate_pool_size]
 
             # Enumerate bounded primary assignments with capacity feasibility.
             primary_assignments: list[tuple[Shop, ...]] = []
-            max_primary_assignments = min(240, max(60, 40 * len(comps)))
+            max_primary_assignments = min(caps["primary_assignments_base"], max(60, 40 * len(comps)))
 
             def _dfs_primary(idx: int, cur: list[Shop], local_slots: dict[int, int]):
                 if len(primary_assignments) >= max_primary_assignments:
@@ -528,7 +548,7 @@ class SimulationRun:
                         primary=primary,
                         candidate_pool=candidate_pool,
                         backup_shop_depth=self.backup_shop_depth,
-                        max_plan_options=18,
+                        max_plan_options=caps["per_component_plan_options"],
                     )
                     if not opts:
                         invalid = True
@@ -538,7 +558,7 @@ class SimulationRun:
                     continue
 
                 # Cartesian product across component plan options, bounded.
-                max_combo_eval = min(900, max(180, 120 * len(comps)))
+                max_combo_eval = min(caps["combo_eval_base"], max(180, 120 * len(comps)))
                 evaluated = 0
                 for combo in product(*per_comp_options):
                     evaluated += 1

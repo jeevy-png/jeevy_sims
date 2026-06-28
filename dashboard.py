@@ -151,6 +151,7 @@ def _settings_dir() -> Path:
 
 def _collect_settings(case_mode, runs, shops, days, jobs_per_day, seed,
                        quality_checks, max_delay_factor, failure_penalty_rate, backup_shop_depth,
+                       allocation_planner_mode,
                        use_util_overrides, capacity_utilization_mean, capacity_utilization_std,
                        job_generation_mode, job_generation_probability, job_generation_days,
                        output_base, shop_type_params_override, job_config_override,
@@ -166,6 +167,7 @@ def _collect_settings(case_mode, runs, shops, days, jobs_per_day, seed,
         "max_delay_factor": float(max_delay_factor),
         "failure_penalty_rate": float(failure_penalty_rate),
         "backup_shop_depth": int(backup_shop_depth),
+        "allocation_planner_mode": allocation_planner_mode,
         "use_util_overrides": bool(use_util_overrides),
         "capacity_utilization_mean": capacity_utilization_mean,
         "capacity_utilization_std": capacity_utilization_std,
@@ -193,6 +195,7 @@ def _apply_loaded_settings_to_session_state(loaded: dict):
         "max_delay_factor": "max_delay_factor",
         "failure_penalty_rate": "failure_penalty_rate",
         "backup_shop_depth": "backup_shop_depth",
+        "allocation_planner_mode": "allocation_planner_mode",
         "use_util_overrides": "use_util_overrides",
         "capacity_utilization_mean": "capacity_utilization_mean",
         "capacity_utilization_std": "capacity_utilization_std",
@@ -461,6 +464,7 @@ def _run_primary(
     shop_type_params_override: Optional[dict[str, dict]],
     job_config: Optional[dict],
     output_dir: str,
+    allocation_planner_mode: str = "fast",
     text_overrides: Optional[dict[str, str]] = None,
 ) -> tuple[dict, list[SimulationRun]]:
     all_stats = []
@@ -482,6 +486,7 @@ def _run_primary(
             job_generation_days=job_generation_days,
             shop_type_params_override=shop_type_params_override,
             job_config=job_config,
+            allocation_planner_mode=allocation_planner_mode,
         )
         sim.run()
         all_stats.append(sim.get_statistics())
@@ -609,9 +614,16 @@ def main():
 
         st.subheader("Quality / Delay")
         quality_checks = st.number_input("Quality Checks (Primary)", min_value=1, max_value=20, value=int(_d("quality_checks", 3)), step=1, key="quality_checks")
-        max_delay_factor = st.number_input("Max Delay Factor", min_value=0.0, max_value=10.0, value=float(_d("max_delay_factor", 1.0)), step=0.1, key="max_delay_factor")
+        max_delay_factor = st.number_input("Max Delay Factor", min_value=0.0, max_value=10.0, value=float(_d("max_delay_factor", 10.0)), step=0.1, key="max_delay_factor")
         failure_penalty_rate = st.number_input("Failure Penalty Rate", min_value=0.0, max_value=5.0, value=float(_d("failure_penalty_rate", 0.20)), step=0.01, key="failure_penalty_rate")
         backup_shop_depth = st.number_input("Primary Backup Shop Depth", min_value=1, max_value=6, value=int(_d("backup_shop_depth", 3)), step=1, key="backup_shop_depth")
+        allocation_planner_mode = st.selectbox(
+            "Primary Allocation Planner Mode",
+            ["fast", "thorough"],
+            index=0 if _d("allocation_planner_mode", "fast") == "fast" else 1,
+            key="allocation_planner_mode",
+            help="fast = quicker bounded search; thorough = deeper combo search, slower.",
+        )
 
         st.subheader("Capacity Utilization")
         use_util_overrides = st.checkbox("Override Utilization Mean/Std for all shop types", value=bool(_d("use_util_overrides", False)), key="use_util_overrides")
@@ -712,6 +724,7 @@ def main():
                 snap = _collect_settings(
                     case_mode, runs, shops, days, jobs_per_day, seed,
                     quality_checks, max_delay_factor, failure_penalty_rate, backup_shop_depth,
+                    allocation_planner_mode,
                     use_util_overrides, capacity_utilization_mean, capacity_utilization_std,
                     job_generation_mode, job_generation_probability, custom_days_selection,
                     output_base, shop_type_params_override, job_config_override,
@@ -724,6 +737,7 @@ def main():
             snap = _collect_settings(
                 case_mode, runs, shops, days, jobs_per_day, seed,
                 quality_checks, max_delay_factor, failure_penalty_rate, backup_shop_depth,
+                allocation_planner_mode,
                 use_util_overrides, capacity_utilization_mean, capacity_utilization_std,
                 job_generation_mode, job_generation_probability, custom_days_selection,
                 output_base, shop_type_params_override, job_config_override,
@@ -799,6 +813,7 @@ def main():
                             shop_type_params_override=shop_type_params_override,
                             job_config=job_config_override,
                             output_dir=str(output_dir),
+                            allocation_planner_mode=allocation_planner_mode,
                             text_overrides=plot_text_overrides,
                         )
                         # Re-label primary figures to match dashboard terminology.
