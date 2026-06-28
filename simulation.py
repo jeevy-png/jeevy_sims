@@ -85,17 +85,24 @@ def _component_plan_options(
     """
     depth = max(1, int(backup_shop_depth))
     others = [s for s in candidate_pool if s.shop_id != primary.shop_id]
+    # Prune backup search to the most promising candidates for speed.
+    others.sort(key=lambda s: (-s.quality_rate, _attempt_cost_estimate(comp, s)))
+    others = others[: min(6, len(others))]
     max_backups = min(depth - 1, len(others))
 
     options: list[tuple[list[Shop], float, float]] = []
     for r in range(0, max_backups + 1):
         for backup_perm in permutations(others, r):
+            if len(options) >= max_plan_options:
+                break
             plan = [primary, *backup_perm]
             combined_quality = _combined_quality_rate(plan)
             if combined_quality < comp.quality_reliability_target:
                 continue
             expected_cost, expected_timeline_days = _expected_plan_metrics(comp, plan)
             options.append((plan, expected_cost, expected_timeline_days))
+        if len(options) >= max_plan_options:
+            break
 
     # Keep bounded best options by expected timeline then expected cost.
     options.sort(key=lambda x: (x[2], x[1]))
@@ -479,11 +486,13 @@ class SimulationRun:
                 continue
 
             available_shops.sort(key=lambda s: _attempt_cost_estimate(baseline_comp, s))
-            candidate_pool = available_shops[: min(8, len(available_shops))]
+            # Keep combinatorics manageable while preserving diversity.
+            candidate_pool_size = min(len(available_shops), max(4, min(6, len(comps) + 2)))
+            candidate_pool = available_shops[:candidate_pool_size]
 
             # Enumerate bounded primary assignments with capacity feasibility.
             primary_assignments: list[tuple[Shop, ...]] = []
-            max_primary_assignments = 1200
+            max_primary_assignments = min(240, max(60, 40 * len(comps)))
 
             def _dfs_primary(idx: int, cur: list[Shop], local_slots: dict[int, int]):
                 if len(primary_assignments) >= max_primary_assignments:
@@ -519,7 +528,7 @@ class SimulationRun:
                         primary=primary,
                         candidate_pool=candidate_pool,
                         backup_shop_depth=self.backup_shop_depth,
-                        max_plan_options=60,
+                        max_plan_options=18,
                     )
                     if not opts:
                         invalid = True
@@ -529,7 +538,7 @@ class SimulationRun:
                     continue
 
                 # Cartesian product across component plan options, bounded.
-                max_combo_eval = 4000
+                max_combo_eval = min(900, max(180, 120 * len(comps)))
                 evaluated = 0
                 for combo in product(*per_comp_options):
                     evaluated += 1
