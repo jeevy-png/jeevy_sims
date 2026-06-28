@@ -183,7 +183,7 @@ def plot_job_statistics(agg: dict, output_dir: str = ".", label: str = ""):
     ax.set_title("Quality Success Rate vs. Target", fontsize=14, color="#0B2A44")
     ax.set_xlabel("Job Type", fontsize=13, color="#0B2A44")
     ax.set_ylabel("Rate", fontsize=13, color="#0B2A44")
-    ax.set_ylim(0, 1.05)
+    ax.set_ylim(0, 1)
     ax.legend(fontsize=10, frameon=False)
     _style_axis(ax, grid_y=True)
 
@@ -196,7 +196,7 @@ def plot_job_statistics(agg: dict, output_dir: str = ".", label: str = ""):
     ax.set_title("Timeline Success Rate vs. Target", fontsize=14, color="#0B2A44")
     ax.set_xlabel("Job Type", fontsize=13, color="#0B2A44")
     ax.set_ylabel("Rate", fontsize=13, color="#0B2A44")
-    ax.set_ylim(0, 1.05)
+    ax.set_ylim(0, 1)
     ax.legend(fontsize=10, frameon=False)
     _style_axis(ax, grid_y=True)
 
@@ -230,9 +230,7 @@ def plot_success_rates_vs_targets(agg: dict, output_dir: str = ".", label: str =
         (axes[0], qual_rates,  q_targets, "Quality",  MODE_COLORS["primary"]),
         (axes[1], time_rates,  t_targets, "Timeline", MODE_COLORS["secondary_random"]),
     ]:
-        lo = min(target.min(), actual.min()) - 0.02
-        hi = max(target.max(), actual.max()) + 0.02
-        ax.plot([lo, hi], [lo, hi], "--", linewidth=1.4, color="#A3B8CC", label="Perfect")
+        ax.plot([0, 1], [0, 1], "--", linewidth=1.4, color="#A3B8CC", label="Perfect")
         sc = ax.scatter(target, actual, c=[i + 1 for i in range(len(job_types))],
                         cmap="tab10", s=90, zorder=5)
         for i, jt in enumerate(job_types):
@@ -241,6 +239,8 @@ def plot_success_rates_vs_targets(agg: dict, output_dir: str = ".", label: str =
         ax.set_xlabel("Required Target Rate", fontsize=13, color="#0B2A44")
         ax.set_ylabel("Actual Rate", fontsize=13, color="#0B2A44")
         ax.set_title(f"{title} Success Rate", fontsize=14, color="#0B2A44")
+        ax.set_xlim(0, 1)
+        ax.set_ylim(0, 1)
         ax.legend(fontsize=10, frameon=False)
         _style_axis(ax, grid_y=False)
 
@@ -287,10 +287,7 @@ def plot_comparison(agg_primary: dict, agg_secondary_rand: dict, agg_secondary_q
         ax.set_title(title, fontsize=14, color="#0B2A44")
         ax.set_xlabel("Job Type", fontsize=13, color="#0B2A44")
         ax.set_ylabel("Rate", fontsize=13, color="#0B2A44")
-        if title == "Quality Success Rate":
-            ax.set_ylim(0.7, 1.05)
-        else:
-            ax.set_ylim(0, 1.05)
+        ax.set_ylim(0, 1)
         ax.legend(fontsize=10, frameon=False)
         _style_axis(ax, grid_y=True)
 
