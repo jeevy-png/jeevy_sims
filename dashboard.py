@@ -551,7 +551,8 @@ def _run_secondary(
 
 
 def _render_images(output_dir: Path):
-    images = sorted(output_dir.glob("*.png"))
+    # Network maps are rendered separately via the run slider.
+    images = [p for p in sorted(output_dir.glob("*.png")) if not p.name.startswith("network_map_")]
     if not images:
         st.warning("No plots were generated.")
         return
