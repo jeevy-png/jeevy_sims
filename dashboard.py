@@ -739,9 +739,13 @@ def main():
 
         uploaded = st.file_uploader("📤 Import settings JSON", type="json", key="settings_uploader")
         if uploaded is not None:
-            loaded = json.loads(uploaded.read())
-            st.session_state["_pending_loaded_settings"] = loaded
-            st.rerun()
+            payload = uploaded.getvalue()
+            payload_sig = hash(payload)
+            if st.session_state.get("_last_import_payload_sig") != payload_sig:
+                loaded = json.loads(payload.decode("utf-8"))
+                st.session_state["_pending_loaded_settings"] = loaded
+                st.session_state["_last_import_payload_sig"] = payload_sig
+                st.rerun()
 
         saved_files = sorted(_settings_dir().glob("*.json"))
         if saved_files:
@@ -751,9 +755,11 @@ def main():
                 key="load_saved_select",
             )
             if chosen != "— select —":
-                loaded = json.loads((_settings_dir() / f"{chosen}.json").read_text())
-                st.session_state["_pending_loaded_settings"] = loaded
-                st.rerun()
+                if st.session_state.get("_last_loaded_settings_name") != chosen:
+                    loaded = json.loads((_settings_dir() / f"{chosen}.json").read_text())
+                    st.session_state["_pending_loaded_settings"] = loaded
+                    st.session_state["_last_loaded_settings_name"] = chosen
+                    st.rerun()
 
     with right_col:
         st.subheader("Plots")
