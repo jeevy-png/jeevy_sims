@@ -696,6 +696,19 @@ def main():
                             output_dir=str(output_dir),
                             methods=methods,
                         )
+                        # Generate plots for secondary simulation results
+                        if case_mode == "base case":
+                            base_agg = agg_secondary.get("random_cheapest", {}).get("agg")
+                            if base_agg:
+                                plot_shop_statistics(base_agg, output_dir=str(output_dir), label="BaseCase")
+                                plot_job_statistics(base_agg, output_dir=str(output_dir), label="BaseCase")
+                                plot_success_rates_vs_targets(base_agg, output_dir=str(output_dir), label="BaseCase")
+                        elif case_mode == "partial network":
+                            partial_agg = agg_secondary.get("quality_top", {}).get("agg")
+                            if partial_agg:
+                                plot_shop_statistics(partial_agg, output_dir=str(output_dir), label="PartialNetwork")
+                                plot_job_statistics(partial_agg, output_dir=str(output_dir), label="PartialNetwork")
+                                plot_success_rates_vs_targets(partial_agg, output_dir=str(output_dir), label="PartialNetwork")
 
                     if (
                         case_mode == "all cases"
