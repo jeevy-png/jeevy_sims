@@ -201,13 +201,20 @@ class SecondarySimulationRun:
                 remaining.append(comp)
                 continue
 
+            avoid_shop_ids: set[int] = set()
+            if comp.job_id in self.jobs:
+                for sibling in self.jobs[comp.job_id].components:
+                    if sibling is not comp and sibling.assigned_shop is not None:
+                        avoid_shop_ids.add(sibling.assigned_shop.shop_id)
+            candidate_pool = [s for s in available if s.shop_id not in avoid_shop_ids] or available
+
             if self.allocation_method == "random_cheapest":
-                sample = self.rng.choice(available, size=min(5, len(available)), replace=False).tolist()
+                sample = self.rng.choice(candidate_pool, size=min(5, len(candidate_pool)), replace=False).tolist()
                 sample.sort(key=lambda s: _cost_estimate(comp, s))
                 chosen = sample[0]
             else:  # quality_top
-                available.sort(key=lambda s: -s.quality_rate)
-                chosen = available[0]
+                candidate_pool.sort(key=lambda s: -s.quality_rate)
+                chosen = candidate_pool[0]
 
             # Allocate (no reallocation in secondary mode)
             comp.assigned_shop = chosen
@@ -292,12 +299,17 @@ class SecondarySimulationRun:
             if all_done and not job.completed:
                 job.completed = True
                 job.day_completed = day
+                deadline_day = job.day_created + min(c.deadline_days for c in job.components) - 1
+                job.days_late = max(0, day - deadline_day)
 
                 min_remaining = min(c.days_remaining for c in job.components)
                 job.timeline_success = (min_remaining >= 2)
 
                 for c in job.components:
                     job.total_cost += c.total_cost
+
+                if job.days_late > 0 and job.late_penalty_per_day > 0:
+                    job.total_cost += job.total_cost * job.late_penalty_per_day * job.days_late
 
                 self.completed_jobs.append(job)
 
@@ -314,6 +326,16 @@ class SecondarySimulationRun:
         shop_type_capacity = defaultdict(list)
         shop_type_profit_daily = defaultdict(list)
         shop_type_busy_daily = defaultdict(list)
+        shop_type_assignment_counts = defaultdict(int)
+
+        shop_type_by_id = {shop.shop_id: shop.shop_type for shop in self.shops}
+
+        for job in self.jobs.values():
+            for comp in job.components:
+                for shop_id in comp.shop_assignment_history:
+                    shop_type = shop_type_by_id.get(shop_id)
+                    if shop_type is not None:
+                        shop_type_assignment_counts[shop_type] += 1
 
         for shop in self.shops:
             fracs = self.shop_capacity_fraction[shop.shop_id]
@@ -329,10 +351,22 @@ class SecondarySimulationRun:
             "shop_type_capacity": {k: np.array(v) for k, v in shop_type_capacity.items()},
             "shop_type_profit_daily": {k: np.array(v) for k, v in shop_type_profit_daily.items()},
             "shop_type_busy_workers_daily": {k: np.array(v) for k, v in shop_type_busy_daily.items()},
+            "shop_type_assignment_counts": dict(shop_type_assignment_counts),
             "shop_type_num_workers": {
                 st: int(np.mean([s.num_workers for s in self.shops if s.shop_type == st]))
                 for st in set(s.shop_type for s in self.shops)
             },
             "completed_jobs": self.completed_jobs,
             "all_jobs": list(self.jobs.values()),
+            "simulation_days": int(self.num_days),
+            "avg_days_late": float(
+                np.mean(
+                    [
+                        max(0, job.day_completed - (job.day_created + min(c.deadline_days for c in job.components) - 1))
+                        for job in self.completed_jobs
+                        if job.day_completed is not None and job.components
+                    ]
+                )
+                if self.completed_jobs else 0.0
+            ),
         }

@@ -30,12 +30,15 @@ def aggregate_runs(all_run_stats: list[dict]) -> dict:
     cap_by_type: dict[str, list] = defaultdict(list)          # type -> list of (shops, days) arrays
     profit_by_type: dict[str, list] = defaultdict(list)
     busy_by_type: dict[str, list] = defaultdict(list)         # type -> list of (busy_array, num_workers)
+    usage_by_type: dict[str, list[float]] = defaultdict(list)
+    run_late_means_by_type: list[dict[int, float]] = []
 
     for run_stats in all_run_stats:
         for st in shop_types:
             cap  = run_stats["shop_type_capacity"].get(st)
             prof = run_stats["shop_type_profit_daily"].get(st)
             busy = run_stats.get("shop_type_busy_workers_daily", {}).get(st)
+            usage = run_stats.get("shop_type_assignment_counts", {}).get(st, 0.0)
             if cap is not None and cap.size > 0:
                 cap_by_type[st].append(cap)          # shape (n_shops, n_days)
             if prof is not None and prof.size > 0:
@@ -43,6 +46,25 @@ def aggregate_runs(all_run_stats: list[dict]) -> dict:
             if busy is not None and busy.size > 0:
                 nw = run_stats.get("shop_type_num_workers", {}).get(st, 1)
                 busy_by_type[st].append((busy, max(1, int(nw))))
+            usage_by_type[st].append(float(usage))
+
+        late_by_type: dict[int, list[float]] = defaultdict(list)
+        for job in run_stats.get("all_jobs", []):
+            if not job.completed or job.day_completed is None or not job.components:
+                continue
+            late_days = float(getattr(job, "days_late", 0))
+            if late_days <= 0:
+                deadline_day = job.day_created + min(c.deadline_days for c in job.components) - 1
+                late_days = max(0, job.day_completed - deadline_day)
+            late_by_type[job.job_type_index].append(float(late_days))
+
+        run_late_means_by_type.append(
+            {
+                jt: float(np.mean(vals))
+                for jt, vals in late_by_type.items()
+                if vals
+            }
+        )
 
     # Average capacity fraction across shops then runs
     agg_capacity: dict[str, np.ndarray] = {}
@@ -71,6 +93,13 @@ def aggregate_runs(all_run_stats: list[dict]) -> dict:
             agg_total_utilization[st] = np.clip(cap + busy, 0, 1)
         elif cap is not None:
             agg_total_utilization[st] = cap
+
+    # Mode-level shop usage frequency (average assignments per run)
+    agg_shop_usage_counts: dict[str, float] = {}
+    for st in shop_types:
+        vals = usage_by_type.get(st, [])
+        if vals:
+            agg_shop_usage_counts[st] = float(np.mean(vals))
 
     # Profit: daily mean & variance across shops, then averaged across runs
     agg_profit_mean: dict[str, np.ndarray] = {}
@@ -113,7 +142,9 @@ def aggregate_runs(all_run_stats: list[dict]) -> dict:
         jt = job.job_type_index
         if job.completed:
             cost_by_type[jt].append(job.total_cost)
-        quality_ok_by_type[jt].append(1 if job.quality_success else 0)
+        # Quality success metric: passed final quality checks / total cases run.
+        # Jobs not completed by horizon do not count as a final quality pass.
+        quality_ok_by_type[jt].append(1 if (job.completed and job.quality_success) else 0)
         timeline_ok_by_type[jt].append(1 if job.timeline_success else 0)
 
         # Set targets (all jobs of the same type share them)
@@ -129,15 +160,34 @@ def aggregate_runs(all_run_stats: list[dict]) -> dict:
     agg_cost_var:  dict[int, float] = {}
     agg_quality_rate:   dict[int, float] = {}
     agg_timeline_rate:  dict[int, float] = {}
+    agg_days_late_by_type: dict[int, float] = {}
+
+    quality_total_cases = int(len(all_jobs))
+    quality_passed_cases = int(sum(1 for job in all_jobs if job.completed and job.quality_success))
+    quality_failed_cases = quality_total_cases - quality_passed_cases
+
+    completed_jobs_count = int(sum(1 for job in all_jobs if job.completed))
+    failed_final_quality_count = int(sum(1 for job in all_jobs if job.completed and not job.quality_success))
 
     for jt in job_types:
         costs = cost_by_type.get(jt, [])
+        # Include all completed jobs, regardless of whether they were on-time or late.
         agg_cost_mean[jt] = float(np.mean(costs)) if costs else 0.0
         agg_cost_var[jt]  = float(np.var(costs))  if costs else 0.0
         qok  = quality_ok_by_type.get(jt, [])
         tok  = timeline_ok_by_type.get(jt, [])
         agg_quality_rate[jt]  = float(np.mean(qok))  if qok  else 0.0
         agg_timeline_rate[jt] = float(np.mean(tok))  if tok  else 0.0
+
+        # Per requested definition: compute per-run days-late by job type, then average across runs.
+        per_run_vals = [run_map.get(jt, 0.0) for run_map in run_late_means_by_type]
+        agg_days_late_by_type[jt] = float(np.mean(per_run_vals)) if per_run_vals else 0.0
+
+    agg_avg_days_late = (
+        float(np.mean(list(agg_days_late_by_type.values())))
+        if agg_days_late_by_type
+        else 0.0
+    )
 
     return dict(
         shop_types=shop_types,
@@ -148,10 +198,18 @@ def aggregate_runs(all_run_stats: list[dict]) -> dict:
         agg_profit_var=agg_profit_var,
         agg_profit_total_mean=agg_profit_total_mean,
         agg_profit_total_var=agg_profit_total_var,
+        agg_shop_usage_counts=agg_shop_usage_counts,
+        agg_days_late_by_type=agg_days_late_by_type,
+        agg_avg_days_late=agg_avg_days_late,
         agg_cost_mean=agg_cost_mean,
         agg_cost_var=agg_cost_var,
         agg_quality_rate=agg_quality_rate,
         agg_timeline_rate=agg_timeline_rate,
+        quality_total_cases=quality_total_cases,
+        quality_passed_cases=quality_passed_cases,
+        quality_failed_cases=quality_failed_cases,
+        completed_jobs_count=completed_jobs_count,
+        failed_final_quality_count=failed_final_quality_count,
         q_target_map=q_target_map,
         t_target_map=t_target_map,
         job_type_indices=job_types,

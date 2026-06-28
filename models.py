@@ -73,6 +73,8 @@ DEFAULT_JOB_CONFIG = {
     "base_labor_rate_step": 4,
     "base_transportation_cost_base": 2000,
     "base_transportation_cost_step": 1111,
+    "late_penalty_per_day_base": 0.01,
+    "late_penalty_per_day_step": 0.0,
     "timeline_reliability_target_base": 0.8,
     "timeline_reliability_target_step": 0.01,
     "quality_reliability_target_base": 0.94,
@@ -129,6 +131,7 @@ class JobComponent:
     material_cost: float
     base_labor_rate: float
     base_transportation_cost: float
+    late_penalty_per_day: float
     max_daily_manhours_per_worker: float
     timeline_reliability_target: float
     quality_reliability_target: float
@@ -205,6 +208,8 @@ class Job:
     quality_success: bool = True
     timeline_success: bool = False
     day_completed: Optional[int] = None
+    late_penalty_per_day: float = 0.01
+    days_late: int = 0
 
 
 # ---------------------------------------------------------------------------
@@ -239,13 +244,129 @@ def _job_type_override_for(i: int, job_config: Optional[dict] = None) -> dict:
     return overrides.get(str(i), overrides.get(i, {}))
 
 
+def _average_shop_profile() -> dict[str, float]:
+    total_fraction = sum(v.get("fraction", 0.0) for v in SHOP_TYPE_PARAMS.values())
+    total_fraction = total_fraction if total_fraction > 0 else 1.0
+
+    def wavg(key: str) -> float:
+        return sum(v.get(key, 0.0) * v.get("fraction", 0.0) for v in SHOP_TYPE_PARAMS.values()) / total_fraction
+
+    return {
+        "worker_capacity": wavg("worker_capacity_mean"),
+        "work_efficiency": wavg("work_efficiency_mean"),
+        "labor_cost_multiplier": wavg("labor_cost_multiplier_mean"),
+    }
+
+
+def _timeline_success_proxy(estimated_days_to_finish: float, deadline_days: float) -> float:
+    slack = float(deadline_days) - float(estimated_days_to_finish)
+    return 1.0 / (1.0 + math.exp(-slack))
+
+
+def _predicted_split_objective(
+    total_capacity: float,
+    deadline_days: int,
+    max_workers: int,
+    max_daily_manhours_per_worker: float,
+    base_labor_rate: float,
+    base_transportation_cost: float,
+    late_penalty_per_day: float,
+    num_components: int,
+) -> tuple[float, float]:
+    """
+    Predict weighted split objective as:
+    expected_total_cost + expected_late_penalty_cost,
+    while accounting for extra shipping introduced by splitting.
+    """
+    profile = _average_shop_profile()
+    num_components = max(1, int(num_components))
+
+    cap_per_component = total_capacity / num_components
+    daily_mh = (
+        min(max_workers * max_daily_manhours_per_worker, max_workers * profile["worker_capacity"])
+        * profile["work_efficiency"]
+    )
+    if daily_mh <= 0:
+        return float("inf"), 0.0
+
+    # Components can run in parallel across different shops; each component has its own 1-day allocation delay.
+    estimated_days = 1.0 + (cap_per_component / daily_mh)
+    p_timeline = _timeline_success_proxy(estimated_days, deadline_days)
+    expected_late_days = max(0.0, estimated_days - deadline_days)
+
+    labor_cost = total_capacity * base_labor_rate * profile["labor_cost_multiplier"]
+
+    # Extra shipping grows with split count (one delivery leg per component).
+    expected_distance = 0.52  # expected Euclidean distance in unit square (approx)
+    shipping_cost = num_components * base_transportation_cost * expected_distance
+
+    base_cost = labor_cost + shipping_cost
+    expected_late_cost = base_cost * late_penalty_per_day * expected_late_days
+
+    # Weighted prediction balances expected lateness exposure and shipping overhead.
+    weighted_objective = base_cost + expected_late_cost
+    return weighted_objective, p_timeline
+
+
+def _select_num_components(i: int, cfg: dict, override: dict) -> int:
+    if "num_components" in override:
+        return max(1, int(override["num_components"]))
+
+    divisor = max(1, int(cfg["num_components_divisor"]))
+    if divisor <= 1:
+        return 1
+
+    total_capacity = float(cfg["capacity_base"] + cfg["capacity_step"] * (i - 1))
+    deadline_days = max(1, int(math.ceil(cfg["deadline_base"] + i * cfg["deadline_step"])))
+    base_labor_rate = float(cfg["base_labor_rate_base"] + cfg["base_labor_rate_step"] * (i - 1))
+    base_transportation_cost = float(cfg["base_transportation_cost_base"] + cfg["base_transportation_cost_step"] * (i - 1))
+    late_penalty_per_day = float(cfg.get("late_penalty_per_day_base", 0.01) + cfg.get("late_penalty_per_day_step", 0.0) * (i - 1))
+
+    max_workers = int(cfg["max_workers"])
+    max_daily_manhours_per_worker = float(cfg["max_daily_manhours_per_worker"])
+
+    max_candidates = max(2, min(divisor, 12))
+    candidates = list(range(1, max_candidates + 1))
+
+    baseline_objective, baseline_p = _predicted_split_objective(
+        total_capacity,
+        deadline_days,
+        max_workers,
+        max_daily_manhours_per_worker,
+        base_labor_rate,
+        base_transportation_cost,
+        late_penalty_per_day,
+        1,
+    )
+    best_components = 1
+    best_objective = baseline_objective
+
+    for n in candidates[1:]:
+        objective, p_timeline = _predicted_split_objective(
+            total_capacity,
+            deadline_days,
+            max_workers,
+            max_daily_manhours_per_worker,
+            base_labor_rate,
+            base_transportation_cost,
+            late_penalty_per_day,
+            n,
+        )
+        if p_timeline >= baseline_p and objective < best_objective:
+            best_objective = objective
+            best_components = n
+
+    return best_components
+
+
 def job_type_params(i: int, rng: np.random.Generator, job_config: Optional[dict] = None) -> dict:
     """Return raw parameters for job type i (1-indexed)."""
     cfg = _resolved_job_config(job_config)
-    num_components = math.ceil(i / max(1, int(cfg["num_components_divisor"])))
+    override = _job_type_override_for(i, job_config)
+    num_components = _select_num_components(i, cfg, override)
     total_capacity = cfg["capacity_base"] + cfg["capacity_step"] * (i - 1)
     cap_per_component = total_capacity / num_components
-    deadline_days = math.ceil((cfg["deadline_base"] + i * cfg["deadline_step"]) / num_components)
+    deadline_days = math.ceil(cfg["deadline_base"] + i * cfg["deadline_step"])
 
     params = dict(
         job_type_index=i,
@@ -255,13 +376,14 @@ def job_type_params(i: int, rng: np.random.Generator, job_config: Optional[dict]
         max_workers=int(cfg["max_workers"]),
         quality_cost=cfg["quality_cost_base"] + cfg["quality_cost_step"] * (i - 1),
         material_cost=cfg["material_cost_base"] + cfg["material_cost_step"] * (i - 1),
+        late_penalty_per_day=cfg.get("late_penalty_per_day_base", 0.01) + cfg.get("late_penalty_per_day_step", 0.0) * (i - 1),
         max_daily_manhours_per_worker=cfg["max_daily_manhours_per_worker"],
         base_labor_rate=cfg["base_labor_rate_base"] + cfg["base_labor_rate_step"] * (i - 1),
         base_transportation_cost=cfg["base_transportation_cost_base"] + cfg["base_transportation_cost_step"] * (i - 1),
         timeline_reliability_target=cfg["timeline_reliability_target_base"] + cfg["timeline_reliability_target_step"] * i,
         quality_reliability_target=cfg["quality_reliability_target_base"] + cfg["quality_reliability_target_step"] * i,
     )
-    params.update(_job_type_override_for(i, job_config))
+    params.update(override)
     return params
 
 
@@ -314,6 +436,7 @@ def generate_jobs(
                 material_cost=params["material_cost"],
                 base_labor_rate=params["base_labor_rate"],
                 base_transportation_cost=params["base_transportation_cost"],
+                late_penalty_per_day=float(params.get("late_penalty_per_day", 0.01)),
                 max_daily_manhours_per_worker=params["max_daily_manhours_per_worker"],
                 timeline_reliability_target=params["timeline_reliability_target"],
                 quality_reliability_target=params["quality_reliability_target"],
@@ -342,6 +465,7 @@ def generate_jobs(
             job_type_index=params["job_type_index"],
             components=components,
             day_created=day,
+            late_penalty_per_day=float(params.get("late_penalty_per_day", 0.01)),
         )
         jobs.append(job)
         all_components.extend(components)

@@ -442,3 +442,60 @@ def plot_job_cost_comparison(agg_primary: dict, agg_secondary_rand: dict, agg_se
     plt.savefig(fname, dpi=150, bbox_inches="tight")
     plt.close()
     print(f"Saved: {fname}")
+
+
+def plot_mode_operational_comparison(agg_primary: dict, agg_secondary_rand: dict, agg_secondary_qual: dict,
+                                     output_dir: str = "."):
+    """
+    Compare operational behavior across modes.
+
+    Left: average shop assignments per type, per mode.
+    Right: average days late per mode.
+    """
+    out = Path(output_dir)
+    out.mkdir(parents=True, exist_ok=True)
+
+    shop_types = ["Elite", "Strong", "Average", "Risky"]
+    modes = [
+        (agg_primary, "Primary", "#5C6BC0"),
+        (agg_secondary_rand, "Secondary: Random", "#26A69A"),
+        (agg_secondary_qual, "Secondary: Qual-Top", "#FFA726"),
+    ]
+
+    x = np.arange(len(shop_types))
+    width = 0.25
+
+    fig, axes = plt.subplots(1, 2, figsize=(15, 5.5))
+    fig.suptitle("Mode Comparison: Shop Usage and Days Late", fontsize=14, fontweight="bold")
+
+    ax = axes[0]
+    for idx, (agg, label, color) in enumerate(modes):
+        vals = [agg.get("agg_shop_usage_counts", {}).get(st, 0.0) for st in shop_types]
+        offset = (idx - 1) * width
+        ax.bar(x + offset, vals, width, label=label, color=color, edgecolor="white")
+    ax.set_xticks(x)
+    ax.set_xticklabels(shop_types)
+    ax.set_title("Average Shop Assignments per Run\n(total assignments for one single-allocation job sums to 1)")
+    ax.set_xlabel("Shop Type")
+    ax.set_ylabel("Assignments")
+    ax.legend(fontsize=8)
+    ax.grid(True, axis="y", alpha=0.3)
+
+    ax = axes[1]
+    mode_labels = [label for _, label, _ in modes]
+    mode_colors = [color for _, _, color in modes]
+    values = [agg.get("agg_avg_days_late", 0.0) for agg, _, _ in modes]
+    bars = ax.bar(mode_labels, values, color=mode_colors, edgecolor="white")
+    ax.set_title("Average Days Late by Mode\n(per job type per run, then averaged across runs)")
+    ax.set_xlabel("Mode")
+    ax.set_ylabel("Days Late")
+    ax.grid(True, axis="y", alpha=0.3)
+    for bar, value in zip(bars, values):
+        ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() * 1.01 + 0.01,
+                f"{value:.2f}", ha="center", va="bottom", fontsize=8)
+
+    plt.tight_layout()
+    fname = out / "mode_operational_comparison.png"
+    plt.savefig(fname, dpi=150, bbox_inches="tight")
+    plt.close()
+    print(f"Saved: {fname}")

@@ -32,52 +32,112 @@ def expected_days_to_complete(comp: JobComponent, shop: Shop) -> float:
     return remaining / daily_mh
 
 
+def _attempt_cost_estimate(comp: JobComponent, shop: Shop) -> float:
+    days = expected_days_to_complete(comp, shop)
+    daily_mh = min(
+        comp.max_workers * comp.max_daily_manhours_per_worker,
+        comp.max_workers * shop.worker_capacity,
+    )
+    labor = daily_mh * days * comp.base_labor_rate * shop.labor_cost_multiplier
+    dist = distance(shop.location, comp.delivery_location)
+    transport = comp.base_transportation_cost * dist
+    return labor + transport
+
+
+def _combined_quality_rate(plan: list[Shop]) -> float:
+    fail_all = 1.0
+    for shop in plan:
+        fail_all *= max(0.0, 1.0 - float(shop.quality_rate))
+    return 1.0 - fail_all
+
+
+def _expected_plan_metrics(comp: JobComponent, plan: list[Shop]) -> tuple[float, float]:
+    """Return (expected_cost, expected_timeline_days) for a stacked fallback plan."""
+    expected_cost = 0.0
+    expected_timeline_days = 0.0
+    p_reach_attempt = 1.0
+
+    for idx, shop in enumerate(plan):
+        attempt_days = 1.0 + expected_days_to_complete(comp, shop)  # 1-day allocation delay per (re-)allocation
+        expected_timeline_days += p_reach_attempt * attempt_days
+        expected_cost += p_reach_attempt * _attempt_cost_estimate(comp, shop)
+
+        if idx > 0:
+            prev = plan[idx - 1]
+            expected_cost += p_reach_attempt * (comp.base_transportation_cost * distance(prev.location, shop.location))
+
+        p_reach_attempt *= max(0.0, 1.0 - float(shop.quality_rate))
+
+    return expected_cost, expected_timeline_days
+
+
 def find_best_shop(
     comp: JobComponent,
     shops: list[Shop],
     rng: np.random.Generator,
+    avoid_shop_ids: Optional[set[int]] = None,
+    backup_shop_depth: int = 3,
+    max_delay_factor: float = 1.0,
 ) -> Optional[Shop]:
     """
     1. Filter to shops with free capacity.
     2. Filter by expected timeline & quality meeting targets.
     3. Sort by cost (labor + transport), return cheapest.
     """
-    candidates = []
-    for shop in shops:
-        if not shop.can_accept(comp):
-            continue
-
-        # --- timeline feasibility: can it finish before deadline? ---
-        days_needed = expected_days_to_complete(comp, shop) + 1  # +1 for allocation delay
-        if days_needed > comp.days_remaining:
-            continue
-
-        # --- threshold by reliability targets ---
-        if shop.quality_rate < comp.quality_reliability_target:
-            continue
-        if shop.work_efficiency < comp.timeline_reliability_target:
-            continue
-
-        candidates.append(shop)
-
-    if not candidates:
+    available = [s for s in shops if s.can_accept(comp)]
+    if not available:
         return None
+
+    # Keep a bounded candidate pool for plan generation.
+    available.sort(key=lambda s: _attempt_cost_estimate(comp, s))
+    candidate_pool = available[: min(16, len(available))]
+
+    depth = max(1, int(backup_shop_depth))
+    timeline_limit = max(1.0, float(comp.days_remaining) * max(0.0, float(max_delay_factor)))
+
+    avoid = avoid_shop_ids or set()
+    best_shop = None
+    best_score = float("inf")
+
+    for primary in candidate_pool:
+        if primary.work_efficiency < comp.timeline_reliability_target:
+            continue
+
+        plan = [primary]
+        remaining = [s for s in candidate_pool if s.shop_id != primary.shop_id]
+        remaining.sort(key=lambda s: (-s.quality_rate, _attempt_cost_estimate(comp, s)))
+
+        while len(plan) < depth and _combined_quality_rate(plan) < comp.quality_reliability_target:
+            if not remaining:
+                break
+            plan.append(remaining.pop(0))
+
+        combined_quality = _combined_quality_rate(plan)
+        if combined_quality < comp.quality_reliability_target:
+            continue
+
+        expected_cost, expected_timeline_days = _expected_plan_metrics(comp, plan)
+        if expected_timeline_days > timeline_limit:
+            continue
+
+        avoid_penalty = 1e9 if primary.shop_id in avoid else 0.0
+        score = expected_cost + avoid_penalty
+        if score < best_score:
+            best_score = score
+            best_shop = primary
+
+    if best_shop is not None:
+        return best_shop
 
     # Sort by estimated cost (labor + transport)
     def cost_estimate(shop: Shop) -> float:
-        days = expected_days_to_complete(comp, shop)
-        daily_mh = min(
-            comp.max_workers * comp.max_daily_manhours_per_worker,
-            comp.max_workers * shop.worker_capacity,
-        )
-        labor = daily_mh * days * comp.base_labor_rate * shop.labor_cost_multiplier
-        # transport from shop to delivery location
-        dist = distance(shop.location, comp.delivery_location)
-        transport = comp.base_transportation_cost * dist
-        return labor + transport
+        return _attempt_cost_estimate(comp, shop)
 
-    candidates.sort(key=cost_estimate)
-    return candidates[0]
+    fallback = [s for s in candidate_pool if s.work_efficiency >= comp.timeline_reliability_target]
+    if not fallback:
+        return None
+    fallback.sort(key=lambda s: ((s.shop_id in avoid), cost_estimate(s)))
+    return fallback[0]
 
 
 def allocate_component(
@@ -132,6 +192,7 @@ class SimulationRun:
         job_generation_days: Optional[list[int]] = None,
         shop_type_params_override: Optional[dict[str, dict]] = None,
         job_config: Optional[dict] = None,
+        backup_shop_depth: int = 3,
     ):
         self.num_shops = num_shops
         self.num_days = num_days
@@ -146,6 +207,7 @@ class SimulationRun:
         self.job_generation_days = set(job_generation_days or [0])
         self.shop_type_params_override = shop_type_params_override
         self.job_config = job_config
+        self.backup_shop_depth = max(1, int(backup_shop_depth))
         self.rng = np.random.default_rng(rng_seed)
 
         # State
@@ -274,11 +336,29 @@ class SimulationRun:
             comp.total_cost += comp.total_cost * self.failure_penalty_rate
             comp.timeline_failure_penalty_applied = True
 
+    def _can_reroute_now(self, comp: JobComponent, current_shop: Optional[Shop]) -> bool:
+        if comp.days_remaining <= 0:
+            return False
+
+        avoid = set()
+        if current_shop is not None:
+            avoid.add(current_shop.shop_id)
+
+        candidate = find_best_shop(
+            comp,
+            self.shops,
+            self.rng,
+            avoid_shop_ids=avoid,
+            backup_shop_depth=self.backup_shop_depth,
+            max_delay_factor=self.max_delay_factor,
+        )
+        return candidate is not None
+
     def _handle_quality_failure(self, comp: JobComponent, shop: Shop) -> bool:
         """Returns True if component should be re-routed, False if it should continue."""
         comp.quality_failure_count += 1
         elapsed = comp.deadline_days - comp.days_remaining
-        if elapsed <= comp.max_delay:
+        if elapsed <= comp.max_delay and self._can_reroute_now(comp, shop):
             comp.manhours_done *= 0.7
             comp.quality_checks_done = 0
             comp.compute_quality_check_thresholds(
@@ -335,7 +415,20 @@ class SimulationRun:
                 continue
 
             is_realloc = comp.prev_shop is not None
-            best = find_best_shop(comp, self.shops, self.rng)
+            avoid_shop_ids: set[int] = set()
+            if not is_realloc and comp.job_id in self.jobs:
+                for sibling in self.jobs[comp.job_id].components:
+                    if sibling is not comp and sibling.assigned_shop is not None:
+                        avoid_shop_ids.add(sibling.assigned_shop.shop_id)
+
+            best = find_best_shop(
+                comp,
+                self.shops,
+                self.rng,
+                avoid_shop_ids=avoid_shop_ids,
+                backup_shop_depth=self.backup_shop_depth,
+                max_delay_factor=self.max_delay_factor,
+            )
             if best is None:
                 # No suitable shop found; try again next day
                 remaining.append(comp)
@@ -429,6 +522,8 @@ class SimulationRun:
             if all_done and not job.completed:
                 job.completed = True
                 job.day_completed = day
+                deadline_day = job.day_created + min(c.deadline_days for c in job.components) - 1
+                job.days_late = max(0, day - deadline_day)
 
                 # Timeline success: completed at least 2 days before deadline
                 min_remaining = min(c.days_remaining for c in job.components)
@@ -436,6 +531,9 @@ class SimulationRun:
 
                 for c in job.components:
                     job.total_cost += c.total_cost
+
+                if job.days_late > 0 and job.late_penalty_per_day > 0:
+                    job.total_cost += job.total_cost * job.late_penalty_per_day * job.days_late
 
                 self.completed_jobs.append(job)
 
@@ -508,6 +606,16 @@ class SimulationRun:
         shop_type_capacity = defaultdict(list)
         shop_type_profit_daily = defaultdict(list)
         shop_type_busy_daily = defaultdict(list)
+        shop_type_assignment_counts = defaultdict(int)
+
+        shop_type_by_id = {shop.shop_id: shop.shop_type for shop in self.shops}
+
+        for job in self.jobs.values():
+            for comp in job.components:
+                for shop_id in comp.shop_assignment_history:
+                    shop_type = shop_type_by_id.get(shop_id)
+                    if shop_type is not None:
+                        shop_type_assignment_counts[shop_type] += 1
 
         for shop in self.shops:
             fracs = self.shop_capacity_fraction[shop.shop_id]
@@ -525,11 +633,23 @@ class SimulationRun:
             "shop_type_capacity": {k: np.array(v) for k, v in shop_type_capacity.items()},
             "shop_type_profit_daily": {k: np.array(v) for k, v in shop_type_profit_daily.items()},
             "shop_type_busy_workers_daily": {k: np.array(v) for k, v in shop_type_busy_daily.items()},
+            "shop_type_assignment_counts": dict(shop_type_assignment_counts),
             "shop_type_num_workers": {
                 st: int(np.mean([s.num_workers for s in self.shops if s.shop_type == st]))
                 for st in set(s.shop_type for s in self.shops)
             },
             "completed_jobs": self.completed_jobs,
             "all_jobs": list(self.jobs.values()),
+            "simulation_days": int(self.num_days),
+            "avg_days_late": float(
+                np.mean(
+                    [
+                        max(0, job.day_completed - (job.day_created + min(c.deadline_days for c in job.components) - 1))
+                        for job in self.completed_jobs
+                        if job.day_completed is not None and job.components
+                    ]
+                )
+                if self.completed_jobs else 0.0
+            ),
         }
         return stats

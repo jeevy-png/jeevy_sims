@@ -1,16 +1,19 @@
 from __future__ import annotations
 
 import datetime as dt
+import json
 from pathlib import Path
 from typing import Optional
 
 import matplotlib.pyplot as plt
+import pandas as pd
 import streamlit as st
 
 from plotting import (
     plot_comparison,
     plot_job_cost_comparison,
     plot_job_statistics,
+    plot_mode_operational_comparison,
     plot_shop_comparison,
     plot_shop_statistics,
     plot_success_rates_vs_targets,
@@ -58,7 +61,15 @@ def _plot_network_map(sim, title: str, output_dir: Path, filename: str) -> Path:
                         "",
                         xy=(b.location[0], b.location[1]),
                         xytext=(a.location[0], a.location[1]),
-                        arrowprops=dict(arrowstyle="->", color="#ff8c24", lw=1.1, alpha=0.65),
+                        arrowprops=dict(
+                            arrowstyle="-|>",
+                            color="#ff5a00",
+                            lw=2.2,
+                            alpha=0.95,
+                            mutation_scale=18,
+                            shrinkA=2,
+                            shrinkB=2,
+                        ),
                     )
 
                 # Last hop to delivery with arrow.
@@ -67,7 +78,16 @@ def _plot_network_map(sim, title: str, output_dir: Path, filename: str) -> Path:
                     "",
                     xy=(comp.delivery_location[0], comp.delivery_location[1]),
                     xytext=(last.location[0], last.location[1]),
-                    arrowprops=dict(arrowstyle="->", color="#8be9fd", lw=0.9, alpha=0.5, linestyle="dashed"),
+                    arrowprops=dict(
+                        arrowstyle="-|>",
+                        color="#00d1ff",
+                        lw=1.8,
+                        alpha=0.85,
+                        mutation_scale=15,
+                        linestyle="dashed",
+                        shrinkA=2,
+                        shrinkB=2,
+                    ),
                 )
 
                 # Quality checks shown as links to hub.
@@ -110,6 +130,106 @@ def _plot_network_map(sim, title: str, output_dir: Path, filename: str) -> Path:
     return out_path
 
 
+def _settings_dir() -> Path:
+    p = Path("saved_settings")
+    p.mkdir(exist_ok=True)
+    return p
+
+
+def _collect_settings(case_mode, runs, shops, days, jobs_per_day, seed,
+                       quality_checks, max_delay_factor, failure_penalty_rate, backup_shop_depth,
+                       use_util_overrides, capacity_utilization_mean, capacity_utilization_std,
+                       job_generation_mode, job_generation_probability,
+                       output_base, shop_type_params_override, job_config_override) -> dict:
+    return {
+        "case_mode": case_mode,
+        "runs": int(runs),
+        "shops": int(shops),
+        "days": int(days),
+        "jobs_per_day": int(jobs_per_day),
+        "seed": int(seed),
+        "quality_checks": int(quality_checks),
+        "max_delay_factor": float(max_delay_factor),
+        "failure_penalty_rate": float(failure_penalty_rate),
+        "backup_shop_depth": int(backup_shop_depth),
+        "use_util_overrides": bool(use_util_overrides),
+        "capacity_utilization_mean": capacity_utilization_mean,
+        "capacity_utilization_std": capacity_utilization_std,
+        "job_generation_mode": job_generation_mode,
+        "job_generation_probability": float(job_generation_probability),
+        "output_base": output_base,
+        "shop_type_params_override": shop_type_params_override,
+        "job_config_override": job_config_override,
+    }
+
+
+def _d(key: str, default):
+    """Read a top-level value from loaded settings, with a default fallback."""
+    return st.session_state.get("_loaded_settings", {}).get(key, default)
+
+
+def _ds(shop_type: str, param: str, default):
+    """Read a shop-type param from loaded settings."""
+    return (
+        st.session_state.get("_loaded_settings", {})
+        .get("shop_type_params_override", {})
+        .get(shop_type, {})
+        .get(param, default)
+    )
+
+
+def _dj(param: str, default):
+    """Read a job config param from loaded settings."""
+    jcfg = st.session_state.get("_loaded_settings", {}).get("job_config_override") or {}
+    return jcfg.get(param, default)
+
+
+def _shop_assumptions_df(shop_cfg: dict) -> pd.DataFrame:
+    rows = []
+    for shop_type, params in shop_cfg.items():
+        row = {"shop_type": shop_type}
+        row.update(params)
+        rows.append(row)
+    return pd.DataFrame(rows).set_index("shop_type")
+
+
+def _job_assumptions_df(job_cfg: dict, selected_types: list) -> pd.DataFrame:
+    import math
+    import numpy as np
+    from models import job_type_params as _jtp, SHOP_TYPE_PARAMS
+    rng = np.random.default_rng(0)
+    # Best-case efficiency is the highest work_efficiency_mean across shop types.
+    best_efficiency = max(v["work_efficiency_mean"] for v in SHOP_TYPE_PARAMS.values())
+    rows = []
+    for i in selected_types:
+        p = _jtp(i, rng, job_config=job_cfg)
+        mw = p["max_workers"]
+        mh = p["max_daily_manhours_per_worker"]
+        cap = p["capacity_needed"]
+        daily_raw = mw * mh
+        # Ideal: perfect efficiency, no delay
+        min_days_ideal = math.ceil(cap / max(daily_raw, 0.01))
+        # Practical: best shop efficiency + 1-day allocation delay
+        min_days_practical = math.ceil(cap / max(daily_raw * best_efficiency, 0.01)) + 1
+        rows.append({
+            "type": f"T{i}",
+            "components": p["num_components"],
+            "deadline_days": p["deadline_days"],
+            "min_days_ideal": min_days_ideal,
+            "min_days_practical": min_days_practical,
+            "capacity_needed": round(p["capacity_needed"], 1),
+            "max_workers": p["max_workers"],
+            "quality_cost": p["quality_cost"],
+            "material_cost": p["material_cost"],
+            "late_penalty_per_day": round(p.get("late_penalty_per_day", 0.01), 4),
+            "base_labor_rate": p["base_labor_rate"],
+            "transport_base": p["base_transportation_cost"],
+            "timeline_target": round(p["timeline_reliability_target"], 3),
+            "quality_target": round(p["quality_reliability_target"], 3),
+        })
+    return pd.DataFrame(rows).set_index("type")
+
+
 def _parse_days_list(raw: str) -> list[int]:
     if not raw.strip():
         return [0]
@@ -143,18 +263,18 @@ def _shop_params_controls() -> dict[str, dict]:
     for shop_type, defaults in SHOP_TYPE_PARAMS.items():
         with st.expander(f"{shop_type} shop type", expanded=False):
             shop_cfg[shop_type] = {
-                "num_workers": int(st.number_input(f"{shop_type} num_workers", min_value=1, max_value=100, value=int(defaults["num_workers"]), step=1)),
-                "quality_rate_mean": float(st.slider(f"{shop_type} quality_rate_mean", min_value=0.0, max_value=1.0, value=float(defaults["quality_rate_mean"]), step=0.001)),
-                "quality_rate_std": float(st.slider(f"{shop_type} quality_rate_std", min_value=0.0, max_value=0.5, value=float(defaults["quality_rate_std"]), step=0.001)),
-                "work_efficiency_mean": float(st.slider(f"{shop_type} work_efficiency_mean", min_value=0.0, max_value=1.0, value=float(defaults["work_efficiency_mean"]), step=0.001)),
-                "work_efficiency_std": float(st.slider(f"{shop_type} work_efficiency_std", min_value=0.0, max_value=0.5, value=float(defaults["work_efficiency_std"]), step=0.001)),
-                "worker_capacity_mean": float(st.number_input(f"{shop_type} worker_capacity_mean", min_value=0.1, max_value=100.0, value=float(defaults["worker_capacity_mean"]), step=0.1)),
-                "worker_capacity_std": float(st.number_input(f"{shop_type} worker_capacity_std", min_value=0.0, max_value=100.0, value=float(defaults["worker_capacity_std"]), step=0.1)),
-                "labor_cost_multiplier_mean": float(st.number_input(f"{shop_type} labor_cost_multiplier_mean", min_value=0.01, max_value=10.0, value=float(defaults["labor_cost_multiplier_mean"]), step=0.01)),
-                "labor_cost_multiplier_std": float(st.number_input(f"{shop_type} labor_cost_multiplier_std", min_value=0.0, max_value=10.0, value=float(defaults["labor_cost_multiplier_std"]), step=0.01)),
-                "capacity_utilization_mean": float(st.slider(f"{shop_type} capacity_utilization_mean", min_value=0.0, max_value=1.0, value=float(defaults["capacity_utilization_mean"]), step=0.01)),
-                "capacity_utilization_std": float(st.slider(f"{shop_type} capacity_utilization_std", min_value=0.0, max_value=1.0, value=float(defaults["capacity_utilization_std"]), step=0.01)),
-                "fraction": float(st.slider(f"{shop_type} fraction", min_value=0.0, max_value=1.0, value=float(defaults["fraction"]), step=0.01)),
+                "num_workers": int(st.number_input(f"{shop_type} num_workers", min_value=1, max_value=100, value=int(_ds(shop_type, "num_workers", defaults["num_workers"])), step=1, key=f"{shop_type}_num_workers")),
+                "quality_rate_mean": float(st.slider(f"{shop_type} quality_rate_mean", min_value=0.0, max_value=1.0, value=float(_ds(shop_type, "quality_rate_mean", defaults["quality_rate_mean"])), step=0.001, key=f"{shop_type}_quality_rate_mean")),
+                "quality_rate_std": float(st.slider(f"{shop_type} quality_rate_std", min_value=0.0, max_value=0.5, value=float(_ds(shop_type, "quality_rate_std", defaults["quality_rate_std"])), step=0.001, key=f"{shop_type}_quality_rate_std")),
+                "work_efficiency_mean": float(st.slider(f"{shop_type} work_efficiency_mean", min_value=0.0, max_value=1.0, value=float(_ds(shop_type, "work_efficiency_mean", defaults["work_efficiency_mean"])), step=0.001, key=f"{shop_type}_work_efficiency_mean")),
+                "work_efficiency_std": float(st.slider(f"{shop_type} work_efficiency_std", min_value=0.0, max_value=0.5, value=float(_ds(shop_type, "work_efficiency_std", defaults["work_efficiency_std"])), step=0.001, key=f"{shop_type}_work_efficiency_std")),
+                "worker_capacity_mean": float(st.number_input(f"{shop_type} worker_capacity_mean", min_value=0.1, max_value=100.0, value=float(_ds(shop_type, "worker_capacity_mean", defaults["worker_capacity_mean"])), step=0.1, key=f"{shop_type}_worker_capacity_mean")),
+                "worker_capacity_std": float(st.number_input(f"{shop_type} worker_capacity_std", min_value=0.0, max_value=100.0, value=float(_ds(shop_type, "worker_capacity_std", defaults["worker_capacity_std"])), step=0.1, key=f"{shop_type}_worker_capacity_std")),
+                "labor_cost_multiplier_mean": float(st.number_input(f"{shop_type} labor_cost_multiplier_mean", min_value=0.01, max_value=10.0, value=float(_ds(shop_type, "labor_cost_multiplier_mean", defaults["labor_cost_multiplier_mean"])), step=0.01, key=f"{shop_type}_labor_cost_multiplier_mean")),
+                "labor_cost_multiplier_std": float(st.number_input(f"{shop_type} labor_cost_multiplier_std", min_value=0.0, max_value=10.0, value=float(_ds(shop_type, "labor_cost_multiplier_std", defaults["labor_cost_multiplier_std"])), step=0.01, key=f"{shop_type}_labor_cost_multiplier_std")),
+                "capacity_utilization_mean": float(st.slider(f"{shop_type} capacity_utilization_mean", min_value=0.0, max_value=1.0, value=float(_ds(shop_type, "capacity_utilization_mean", defaults["capacity_utilization_mean"])), step=0.01, key=f"{shop_type}_capacity_utilization_mean")),
+                "capacity_utilization_std": float(st.slider(f"{shop_type} capacity_utilization_std", min_value=0.0, max_value=1.0, value=float(_ds(shop_type, "capacity_utilization_std", defaults["capacity_utilization_std"])), step=0.01, key=f"{shop_type}_capacity_utilization_std")),
+                "fraction": float(st.slider(f"{shop_type} fraction", min_value=0.0, max_value=1.0, value=float(_ds(shop_type, "fraction", defaults["fraction"])), step=0.01, key=f"{shop_type}_fraction")),
             }
     return _normalize_shop_fractions(shop_cfg)
 
@@ -163,57 +283,60 @@ def _job_config_controls(max_days: int) -> tuple[dict, list[int]]:
     st.subheader("Job Parameters")
     cfg = dict(DEFAULT_JOB_CONFIG)
 
-    selection_mode = st.selectbox("Job type selection mode", ["range", "explicit"], index=0)
+    selection_mode = st.selectbox("Job type selection mode", ["range", "explicit"], index=0, key="job_type_selection_mode")
     if selection_mode == "range":
-        min_idx = int(st.number_input("job_type_min_index", min_value=1, max_value=50, value=int(cfg["job_type_min_index"]), step=1))
-        max_idx = int(st.number_input("job_type_max_index", min_value=min_idx, max_value=50, value=int(cfg["job_type_max_index"]), step=1))
+        min_idx = int(st.number_input("job_type_min_index", min_value=1, max_value=50, value=int(_dj("job_type_min_index", cfg["job_type_min_index"])), step=1, key="job_type_min_index"))
+        max_idx = int(st.number_input("job_type_max_index", min_value=min_idx, max_value=50, value=int(_dj("job_type_max_index", cfg["job_type_max_index"])), step=1, key="job_type_max_index"))
         cfg["job_type_min_index"] = min_idx
         cfg["job_type_max_index"] = max_idx
         selected_types = list(range(min_idx, max_idx + 1))
         cfg["job_type_indices"] = []
     else:
-        selected_types = st.multiselect("job_type_indices", options=list(range(1, 51)), default=list(range(1, 11)))
+        selected_types = st.multiselect("job_type_indices", options=list(range(1, 51)), default=_dj("job_type_indices", list(range(1, 11))), key="job_type_indices")
         if not selected_types:
             selected_types = [1]
         cfg["job_type_indices"] = selected_types
 
-    cfg["num_components_divisor"] = int(st.number_input("num_components_divisor", min_value=1, max_value=50, value=int(cfg["num_components_divisor"]), step=1))
-    cfg["deadline_base"] = float(st.number_input("deadline_base", min_value=0.0, max_value=1000.0, value=float(cfg["deadline_base"]), step=1.0))
-    cfg["deadline_step"] = float(st.number_input("deadline_step", min_value=0.0, max_value=1000.0, value=float(cfg["deadline_step"]), step=1.0))
-    cfg["capacity_base"] = float(st.number_input("capacity_base", min_value=0.0, max_value=1_000_000.0, value=float(cfg["capacity_base"]), step=1.0))
-    cfg["capacity_step"] = float(st.number_input("capacity_step", min_value=0.0, max_value=1_000_000.0, value=float(cfg["capacity_step"]), step=1.0))
-    cfg["max_workers"] = int(st.number_input("max_workers", min_value=1, max_value=100, value=int(cfg["max_workers"]), step=1))
-    cfg["quality_cost_base"] = float(st.number_input("quality_cost_base", min_value=0.0, max_value=1_000_000.0, value=float(cfg["quality_cost_base"]), step=1.0))
-    cfg["quality_cost_step"] = float(st.number_input("quality_cost_step", min_value=0.0, max_value=1_000_000.0, value=float(cfg["quality_cost_step"]), step=1.0))
-    cfg["material_cost_base"] = float(st.number_input("material_cost_base", min_value=0.0, max_value=10_000_000.0, value=float(cfg["material_cost_base"]), step=1.0))
-    cfg["material_cost_step"] = float(st.number_input("material_cost_step", min_value=0.0, max_value=10_000_000.0, value=float(cfg["material_cost_step"]), step=1.0))
-    cfg["max_daily_manhours_per_worker"] = float(st.number_input("max_daily_manhours_per_worker", min_value=0.1, max_value=100.0, value=float(cfg["max_daily_manhours_per_worker"]), step=0.1))
-    cfg["base_labor_rate_base"] = float(st.number_input("base_labor_rate_base", min_value=0.0, max_value=10_000.0, value=float(cfg["base_labor_rate_base"]), step=1.0))
-    cfg["base_labor_rate_step"] = float(st.number_input("base_labor_rate_step", min_value=0.0, max_value=10_000.0, value=float(cfg["base_labor_rate_step"]), step=1.0))
-    cfg["base_transportation_cost_base"] = float(st.number_input("base_transportation_cost_base", min_value=0.0, max_value=10_000_000.0, value=float(cfg["base_transportation_cost_base"]), step=1.0))
-    cfg["base_transportation_cost_step"] = float(st.number_input("base_transportation_cost_step", min_value=0.0, max_value=10_000_000.0, value=float(cfg["base_transportation_cost_step"]), step=1.0))
-    cfg["timeline_reliability_target_base"] = float(st.slider("timeline_reliability_target_base", min_value=0.0, max_value=1.0, value=float(cfg["timeline_reliability_target_base"]), step=0.001))
-    cfg["timeline_reliability_target_step"] = float(st.slider("timeline_reliability_target_step", min_value=0.0, max_value=1.0, value=float(cfg["timeline_reliability_target_step"]), step=0.001))
-    cfg["quality_reliability_target_base"] = float(st.slider("quality_reliability_target_base", min_value=0.0, max_value=1.0, value=float(cfg["quality_reliability_target_base"]), step=0.001))
-    cfg["quality_reliability_target_step"] = float(st.slider("quality_reliability_target_step", min_value=0.0, max_value=1.0, value=float(cfg["quality_reliability_target_step"]), step=0.001))
+    cfg["num_components_divisor"] = int(st.number_input("num_components_divisor", min_value=1, max_value=50, value=int(_dj("num_components_divisor", cfg["num_components_divisor"])), step=1, key="num_components_divisor"))
+    cfg["deadline_base"] = float(st.number_input("deadline_base", min_value=0.0, max_value=1000.0, value=float(_dj("deadline_base", cfg["deadline_base"])), step=1.0, key="deadline_base"))
+    cfg["deadline_step"] = float(st.number_input("deadline_step", min_value=0.0, max_value=1000.0, value=float(_dj("deadline_step", cfg["deadline_step"])), step=1.0, key="deadline_step"))
+    cfg["capacity_base"] = float(st.number_input("capacity_base", min_value=0.0, max_value=1_000_000.0, value=float(_dj("capacity_base", cfg["capacity_base"])), step=1.0, key="capacity_base"))
+    cfg["capacity_step"] = float(st.number_input("capacity_step", min_value=0.0, max_value=1_000_000.0, value=float(_dj("capacity_step", cfg["capacity_step"])), step=1.0, key="capacity_step"))
+    cfg["max_workers"] = int(st.number_input("max_workers", min_value=1, max_value=100, value=int(_dj("max_workers", cfg["max_workers"])), step=1, key="max_workers"))
+    cfg["quality_cost_base"] = float(st.number_input("quality_cost_base", min_value=0.0, max_value=1_000_000.0, value=float(_dj("quality_cost_base", cfg["quality_cost_base"])), step=1.0, key="quality_cost_base"))
+    cfg["quality_cost_step"] = float(st.number_input("quality_cost_step", min_value=0.0, max_value=1_000_000.0, value=float(_dj("quality_cost_step", cfg["quality_cost_step"])), step=1.0, key="quality_cost_step"))
+    cfg["material_cost_base"] = float(st.number_input("material_cost_base", min_value=0.0, max_value=10_000_000.0, value=float(_dj("material_cost_base", cfg["material_cost_base"])), step=1.0, key="material_cost_base"))
+    cfg["material_cost_step"] = float(st.number_input("material_cost_step", min_value=0.0, max_value=10_000_000.0, value=float(_dj("material_cost_step", cfg["material_cost_step"])), step=1.0, key="material_cost_step"))
+    cfg["max_daily_manhours_per_worker"] = float(st.number_input("max_daily_manhours_per_worker", min_value=0.1, max_value=100.0, value=float(_dj("max_daily_manhours_per_worker", cfg["max_daily_manhours_per_worker"])), step=0.1, key="max_daily_manhours_per_worker"))
+    cfg["base_labor_rate_base"] = float(st.number_input("base_labor_rate_base", min_value=0.0, max_value=10_000.0, value=float(_dj("base_labor_rate_base", cfg["base_labor_rate_base"])), step=1.0, key="base_labor_rate_base"))
+    cfg["base_labor_rate_step"] = float(st.number_input("base_labor_rate_step", min_value=0.0, max_value=10_000.0, value=float(_dj("base_labor_rate_step", cfg["base_labor_rate_step"])), step=1.0, key="base_labor_rate_step"))
+    cfg["base_transportation_cost_base"] = float(st.number_input("base_transportation_cost_base", min_value=0.0, max_value=10_000_000.0, value=float(_dj("base_transportation_cost_base", cfg["base_transportation_cost_base"])), step=1.0, key="base_transportation_cost_base"))
+    cfg["base_transportation_cost_step"] = float(st.number_input("base_transportation_cost_step", min_value=0.0, max_value=10_000_000.0, value=float(_dj("base_transportation_cost_step", cfg["base_transportation_cost_step"])), step=1.0, key="base_transportation_cost_step"))
+    cfg["late_penalty_per_day_base"] = float(st.number_input("late_penalty_per_day_base", min_value=0.0, max_value=1.0, value=float(_dj("late_penalty_per_day_base", cfg["late_penalty_per_day_base"])), step=0.001, key="late_penalty_per_day_base"))
+    cfg["late_penalty_per_day_step"] = float(st.number_input("late_penalty_per_day_step", min_value=0.0, max_value=1.0, value=float(_dj("late_penalty_per_day_step", cfg["late_penalty_per_day_step"])), step=0.001, key="late_penalty_per_day_step"))
+    cfg["timeline_reliability_target_base"] = float(st.slider("timeline_reliability_target_base", min_value=0.0, max_value=1.0, value=float(_dj("timeline_reliability_target_base", cfg["timeline_reliability_target_base"])), step=0.001, key="timeline_reliability_target_base"))
+    cfg["timeline_reliability_target_step"] = float(st.slider("timeline_reliability_target_step", min_value=0.0, max_value=1.0, value=float(_dj("timeline_reliability_target_step", cfg["timeline_reliability_target_step"])), step=0.001, key="timeline_reliability_target_step"))
+    cfg["quality_reliability_target_base"] = float(st.slider("quality_reliability_target_base", min_value=0.0, max_value=1.0, value=float(_dj("quality_reliability_target_base", cfg["quality_reliability_target_base"])), step=0.001, key="quality_reliability_target_base"))
+    cfg["quality_reliability_target_step"] = float(st.slider("quality_reliability_target_step", min_value=0.0, max_value=1.0, value=float(_dj("quality_reliability_target_step", cfg["quality_reliability_target_step"])), step=0.001, key="quality_reliability_target_step"))
 
     st.subheader("Per-Type Hardcoded Job Overrides")
-    override_types = st.multiselect("Override specific job types", options=selected_types, default=[])
+    override_types = st.multiselect("Override specific job types", options=selected_types, default=_dj("job_override_types", []), key="job_override_types")
     overrides: dict[str, dict] = {}
     for jt in override_types:
         with st.expander(f"Type {jt} overrides", expanded=False):
             overrides[str(jt)] = {
-                "num_components": int(st.number_input(f"T{jt} num_components", min_value=1, max_value=100, value=max(1, int((jt + cfg["num_components_divisor"] - 1) // cfg["num_components_divisor"])), step=1)),
-                "deadline_days": int(st.number_input(f"T{jt} deadline_days", min_value=1, max_value=max(1, max_days * 2), value=max(1, int((cfg["deadline_base"] + jt * cfg["deadline_step"]) / max(1, int((jt + cfg["num_components_divisor"] - 1) // cfg["num_components_divisor"])))), step=1)),
-                "capacity_needed": float(st.number_input(f"T{jt} capacity_needed", min_value=0.0, max_value=10_000_000.0, value=float(cfg["capacity_base"] + cfg["capacity_step"] * (jt - 1)), step=1.0)),
-                "max_workers": int(st.number_input(f"T{jt} max_workers", min_value=1, max_value=100, value=int(cfg["max_workers"]), step=1)),
-                "quality_cost": float(st.number_input(f"T{jt} quality_cost", min_value=0.0, max_value=1_000_000.0, value=float(cfg["quality_cost_base"] + cfg["quality_cost_step"] * (jt - 1)), step=1.0)),
-                "material_cost": float(st.number_input(f"T{jt} material_cost", min_value=0.0, max_value=10_000_000.0, value=float(cfg["material_cost_base"] + cfg["material_cost_step"] * (jt - 1)), step=1.0)),
-                "max_daily_manhours_per_worker": float(st.number_input(f"T{jt} max_daily_manhours_per_worker", min_value=0.1, max_value=100.0, value=float(cfg["max_daily_manhours_per_worker"]), step=0.1)),
-                "base_labor_rate": float(st.number_input(f"T{jt} base_labor_rate", min_value=0.0, max_value=10_000.0, value=float(cfg["base_labor_rate_base"] + cfg["base_labor_rate_step"] * (jt - 1)), step=1.0)),
-                "base_transportation_cost": float(st.number_input(f"T{jt} base_transportation_cost", min_value=0.0, max_value=10_000_000.0, value=float(cfg["base_transportation_cost_base"] + cfg["base_transportation_cost_step"] * (jt - 1)), step=1.0)),
-                "timeline_reliability_target": float(st.slider(f"T{jt} timeline_reliability_target", min_value=0.0, max_value=1.0, value=float(cfg["timeline_reliability_target_base"] + cfg["timeline_reliability_target_step"] * jt), step=0.001)),
-                "quality_reliability_target": float(st.slider(f"T{jt} quality_reliability_target", min_value=0.0, max_value=1.0, value=float(cfg["quality_reliability_target_base"] + cfg["quality_reliability_target_step"] * jt), step=0.001)),
+                "num_components": int(st.number_input(f"T{jt} num_components", min_value=1, max_value=100, value=max(1, int(cfg["num_components_divisor"])), step=1, key=f"job_{jt}_num_components")),
+                "deadline_days": int(st.number_input(f"T{jt} deadline_days", min_value=1, max_value=max(1, max_days * 2), value=max(1, int(cfg["deadline_base"] + jt * cfg["deadline_step"])), step=1, key=f"job_{jt}_deadline_days")),
+                "capacity_needed": float(st.number_input(f"T{jt} capacity_needed", min_value=0.0, max_value=10_000_000.0, value=float(cfg["capacity_base"] + cfg["capacity_step"] * (jt - 1)), step=1.0, key=f"job_{jt}_capacity_needed")),
+                "max_workers": int(st.number_input(f"T{jt} max_workers", min_value=1, max_value=100, value=int(cfg["max_workers"]), step=1, key=f"job_{jt}_max_workers")),
+                "quality_cost": float(st.number_input(f"T{jt} quality_cost", min_value=0.0, max_value=1_000_000.0, value=float(cfg["quality_cost_base"] + cfg["quality_cost_step"] * (jt - 1)), step=1.0, key=f"job_{jt}_quality_cost")),
+                "material_cost": float(st.number_input(f"T{jt} material_cost", min_value=0.0, max_value=10_000_000.0, value=float(cfg["material_cost_base"] + cfg["material_cost_step"] * (jt - 1)), step=1.0, key=f"job_{jt}_material_cost")),
+                "late_penalty_per_day": float(st.number_input(f"T{jt} late_penalty_per_day", min_value=0.0, max_value=1.0, value=float(cfg["late_penalty_per_day_base"] + cfg["late_penalty_per_day_step"] * (jt - 1)), step=0.001, key=f"job_{jt}_late_penalty_per_day")),
+                "max_daily_manhours_per_worker": float(st.number_input(f"T{jt} max_daily_manhours_per_worker", min_value=0.1, max_value=100.0, value=float(cfg["max_daily_manhours_per_worker"]), step=0.1, key=f"job_{jt}_max_daily_manhours_per_worker")),
+                "base_labor_rate": float(st.number_input(f"T{jt} base_labor_rate", min_value=0.0, max_value=10_000.0, value=float(cfg["base_labor_rate_base"] + cfg["base_labor_rate_step"] * (jt - 1)), step=1.0, key=f"job_{jt}_base_labor_rate")),
+                "base_transportation_cost": float(st.number_input(f"T{jt} base_transportation_cost", min_value=0.0, max_value=10_000_000.0, value=float(cfg["base_transportation_cost_base"] + cfg["base_transportation_cost_step"] * (jt - 1)), step=1.0, key=f"job_{jt}_base_transportation_cost")),
+                "timeline_reliability_target": float(st.slider(f"T{jt} timeline_reliability_target", min_value=0.0, max_value=1.0, value=float(cfg["timeline_reliability_target_base"] + cfg["timeline_reliability_target_step"] * jt), step=0.001, key=f"job_{jt}_timeline_reliability_target")),
+                "quality_reliability_target": float(st.slider(f"T{jt} quality_reliability_target", min_value=0.0, max_value=1.0, value=float(cfg["quality_reliability_target_base"] + cfg["quality_reliability_target_step"] * jt), step=0.001, key=f"job_{jt}_quality_reliability_target")),
             }
     cfg["job_type_overrides"] = overrides
 
@@ -229,6 +352,7 @@ def _run_primary(
     quality_checks: int,
     failure_penalty_rate: float,
     max_delay_factor: float,
+    backup_shop_depth: int,
     capacity_utilization_mean: Optional[float],
     capacity_utilization_std: Optional[float],
     job_generation_mode: str,
@@ -237,9 +361,9 @@ def _run_primary(
     shop_type_params_override: Optional[dict[str, dict]],
     job_config: Optional[dict],
     output_dir: str,
-) -> tuple[dict, SimulationRun]:
+) -> tuple[dict, list[SimulationRun]]:
     all_stats = []
-    exemplar_sim: Optional[SimulationRun] = None
+    run_sims: list[SimulationRun] = []
     for r in range(runs):
         sim = SimulationRun(
             num_shops=shops,
@@ -249,6 +373,7 @@ def _run_primary(
             num_quality_checks=quality_checks,
             failure_penalty_rate=failure_penalty_rate,
             max_delay_factor=max_delay_factor,
+            backup_shop_depth=backup_shop_depth,
             capacity_utilization_mean=capacity_utilization_mean,
             capacity_utilization_std=capacity_utilization_std,
             job_generation_mode=job_generation_mode,
@@ -259,13 +384,13 @@ def _run_primary(
         )
         sim.run()
         all_stats.append(sim.get_statistics())
-        exemplar_sim = sim  # always keep last run
+        run_sims.append(sim)
 
     agg = aggregate_runs(all_stats)
     plot_shop_statistics(agg, output_dir=output_dir, label="Primary")
     plot_job_statistics(agg, output_dir=output_dir, label="Primary")
     plot_success_rates_vs_targets(agg, output_dir=output_dir, label="Primary")
-    return agg, exemplar_sim
+    return agg, run_sims
 
 
 def _run_secondary(
@@ -333,6 +458,28 @@ def _render_images(output_dir: Path):
         st.image(str(image_path), caption=image_path.name, use_container_width=True)
 
 
+def _quality_audit_rows(label: str, agg: Optional[dict]) -> list[dict]:
+    if not agg:
+        return []
+    total = int(agg.get("quality_total_cases", 0))
+    passed = int(agg.get("quality_passed_cases", 0))
+    failed = int(agg.get("quality_failed_cases", 0))
+    completed = int(agg.get("completed_jobs_count", 0))
+    failed_final_quality = int(agg.get("failed_final_quality_count", 0))
+    rate = (passed / total) if total > 0 else 0.0
+    return [
+        {
+            "mode": label,
+            "total_jobs_run": total,
+            "completed_jobs": completed,
+            "quality_passed_final": passed,
+            "quality_failed_final_or_unfinished": failed,
+            "failed_final_quality_completed": failed_final_quality,
+            "quality_success_rate": round(rate, 4),
+        }
+    ]
+
+
 def main():
     st.set_page_config(page_title="Jeevy Simulation Dashboard", layout="wide")
     st.title("Jeevy Simulation Dashboard")
@@ -355,6 +502,7 @@ def main():
         quality_checks = st.number_input("Quality Checks (Primary)", min_value=1, max_value=20, value=3, step=1)
         max_delay_factor = st.number_input("Max Delay Factor", min_value=0.0, max_value=10.0, value=1.0, step=0.1)
         failure_penalty_rate = st.number_input("Failure Penalty Rate", min_value=0.0, max_value=5.0, value=0.20, step=0.01)
+        backup_shop_depth = st.number_input("Primary Backup Shop Depth", min_value=1, max_value=6, value=int(_d("backup_shop_depth", 3)), step=1)
 
         st.subheader("Capacity Utilization")
         use_util_overrides = st.checkbox("Override Utilization Mean/Std for all shop types", value=False)
@@ -397,27 +545,76 @@ def main():
     left_col, right_col = st.columns([1, 3])
 
     with left_col:
-        st.subheader("Current Configuration")
-        st.write(
-            {
-                "case": case_mode,
-                "runs": int(runs),
-                "shops": int(shops),
-                "days": int(days),
-                "jobs_per_generation_event": int(jobs_per_day),
-                "seed": int(seed),
-                "quality_checks": int(quality_checks),
-                "max_delay_factor": float(max_delay_factor),
-                "failure_penalty_rate": float(failure_penalty_rate),
-                "capacity_utilization_mean_override": capacity_utilization_mean,
-                "capacity_utilization_std_override": capacity_utilization_std,
-                "job_generation_mode": job_generation_mode,
-                "job_generation_probability": float(job_generation_probability),
-                "generated_job_types": selected_job_types,
-                "shop_params_customized": True,
-                "job_params_customized": True,
-            }
+        st.subheader("Assumptions")
+
+        st.markdown("**Shop Parameters**")
+        shop_df = _shop_assumptions_df(shop_type_params_override)
+        st.dataframe(shop_df, use_container_width=True)
+
+        st.markdown("**Job Parameters**")
+        job_df = _job_assumptions_df(job_config_override, selected_job_types)
+        # Highlight rows where deadline < min_days_practical
+        def _style_row(row):
+            flag = row.get("deadline_days", 999) < row.get("min_days_practical", 0)
+            return ["background-color: #ffcccc" if flag else "" for _ in row]
+        st.dataframe(
+            job_df.style.apply(_style_row, axis=1),
+            use_container_width=True,
         )
+        st.caption(
+            "min_days_ideal = ceil(capacity / (max_workers × mh/worker)) — no delay, perfect efficiency.  \n"
+            "min_days_practical = ideal ÷ best shop efficiency + 1 allocation day.  \n"
+            "Rows highlighted red have deadline < min_days_practical."
+        )
+
+        st.subheader("Save / Export / Import Settings")
+        settings_name = st.text_input("Settings name", value="my_settings", key="settings_name_input")
+        save_col, export_col = st.columns(2)
+        with save_col:
+            if st.button("💾 Save settings", use_container_width=True):
+                snap = _collect_settings(
+                    case_mode, runs, shops, days, jobs_per_day, seed,
+                    quality_checks, max_delay_factor, failure_penalty_rate, backup_shop_depth,
+                    use_util_overrides, capacity_utilization_mean, capacity_utilization_std,
+                    job_generation_mode, job_generation_probability,
+                    output_base, shop_type_params_override, job_config_override,
+                )
+                path = _settings_dir() / f"{settings_name.strip() or 'settings'}.json"
+                path.write_text(json.dumps(snap, indent=2))
+                st.success(f"Saved to {path}")
+        with export_col:
+            snap = _collect_settings(
+                case_mode, runs, shops, days, jobs_per_day, seed,
+                quality_checks, max_delay_factor, failure_penalty_rate, backup_shop_depth,
+                use_util_overrides, capacity_utilization_mean, capacity_utilization_std,
+                job_generation_mode, job_generation_probability,
+                output_base, shop_type_params_override, job_config_override,
+            )
+            st.download_button(
+                "📥 Export JSON",
+                data=json.dumps(snap, indent=2),
+                file_name=f"{settings_name.strip() or 'settings'}.json",
+                mime="application/json",
+                use_container_width=True,
+            )
+
+        uploaded = st.file_uploader("📤 Import settings JSON", type="json", key="settings_uploader")
+        if uploaded is not None:
+            loaded = json.loads(uploaded.read())
+            st.session_state["_loaded_settings"] = loaded
+            st.success("Settings loaded — they will apply on next page interaction.")
+
+        saved_files = sorted(_settings_dir().glob("*.json"))
+        if saved_files:
+            chosen = st.selectbox(
+                "Load saved settings",
+                options=["— select —"] + [f.stem for f in saved_files],
+                key="load_saved_select",
+            )
+            if chosen != "— select —":
+                loaded = json.loads((_settings_dir() / f"{chosen}.json").read_text())
+                st.session_state["_loaded_settings"] = loaded
+                st.success(f"Loaded '{chosen}' — settings will apply on next page interaction.")
 
     with right_col:
         st.subheader("Plots")
@@ -439,7 +636,7 @@ def main():
                     map_paths: list[Path] = []
 
                     if case_mode in ("full network", "all cases"):
-                        agg_primary, primary_sim = _run_primary(
+                        agg_primary, primary_sims = _run_primary(
                             runs=int(runs),
                             shops=int(shops),
                             days=int(days),
@@ -448,6 +645,7 @@ def main():
                             quality_checks=int(quality_checks),
                             failure_penalty_rate=float(failure_penalty_rate),
                             max_delay_factor=float(max_delay_factor),
+                            backup_shop_depth=int(backup_shop_depth),
                             capacity_utilization_mean=capacity_utilization_mean,
                             capacity_utilization_std=capacity_utilization_std,
                             job_generation_mode=job_generation_mode,
@@ -461,13 +659,13 @@ def main():
                         plot_shop_statistics(agg_primary, output_dir=str(output_dir), label="FullNetwork")
                         plot_job_statistics(agg_primary, output_dir=str(output_dir), label="FullNetwork")
                         plot_success_rates_vs_targets(agg_primary, output_dir=str(output_dir), label="FullNetwork")
-                        if primary_sim is not None:
+                        for idx, sim in enumerate(primary_sims, start=1):
                             map_paths.append(
                                 _plot_network_map(
-                                    primary_sim,
-                                    "Full Network Flow Map (final run)",
+                                    sim,
+                                    f"Full Network Flow Map (run {idx})",
                                     output_dir,
-                                    "network_map_full_network.png",
+                                    f"network_map_full_network_run_{idx}.png",
                                 )
                             )
 
@@ -522,18 +720,41 @@ def main():
                             agg_secondary_qual=agg_secondary["quality_top"]["agg"],
                             output_dir=str(output_dir),
                         )
+                        plot_mode_operational_comparison(
+                            agg_primary=agg_primary,
+                            agg_secondary_rand=agg_secondary["random_cheapest"]["agg"],
+                            agg_secondary_qual=agg_secondary["quality_top"]["agg"],
+                            output_dir=str(output_dir),
+                        )
 
                 st.session_state["last_output_dir"] = str(output_dir)
                 st.session_state["last_map_paths"] = [str(p) for p in map_paths]
+                st.session_state["last_quality_audit"] = {
+                    "primary": agg_primary,
+                    "secondary": agg_secondary,
+                }
                 st.success(f"Run complete. Plots saved to: {output_dir}")
             except Exception as exc:
                 st.error(f"Run failed: {exc}")
 
+        quality_audit = st.session_state.get("last_quality_audit")
+        if quality_audit:
+            rows = []
+            rows += _quality_audit_rows("Full Network", quality_audit.get("primary"))
+            secondary = quality_audit.get("secondary") or {}
+            rows += _quality_audit_rows("Base Case", secondary.get("random_cheapest", {}).get("agg"))
+            rows += _quality_audit_rows("Partial Network", secondary.get("quality_top", {}).get("agg"))
+            if rows:
+                st.subheader("Quality Audit")
+                st.dataframe(pd.DataFrame(rows), use_container_width=True)
+                st.caption("quality_success_rate = quality_passed_final / total_jobs_run")
+
         map_paths = st.session_state.get("last_map_paths", [])
         if map_paths:
             st.subheader("Network Travel Maps")
-            for p in map_paths:
-                st.image(p, caption=Path(p).name, use_container_width=True)
+            run_index = st.slider("Network map run", min_value=1, max_value=len(map_paths), value=len(map_paths), step=1)
+            selected = map_paths[run_index - 1]
+            st.image(selected, caption=f"Run {run_index}: {Path(selected).name}", use_container_width=True)
 
         last_output_dir = st.session_state.get("last_output_dir")
         if last_output_dir:
