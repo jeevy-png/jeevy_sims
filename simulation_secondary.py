@@ -302,8 +302,8 @@ class SecondarySimulationRun:
                 deadline_day = job.day_created + min(c.deadline_days for c in job.components) - 1
                 job.days_late = max(0, day - deadline_day)
 
-                min_remaining = min(c.days_remaining for c in job.components)
-                job.timeline_success = (min_remaining >= 2)
+                days_early = deadline_day - day
+                job.timeline_success = (days_early >= 2)
 
                 for c in job.components:
                     job.total_cost += c.total_cost
