@@ -30,21 +30,21 @@ def _plot_network_map(sim, title: str, output_dir: Path, filename: str) -> Path:
     shop_by_id = {s.shop_id: s for s in sim.shops}
 
     fig, ax = plt.subplots(figsize=(9, 7))
-    fig.patch.set_facecolor("#111315")
-    ax.set_facecolor("#171b1f")
+    fig.patch.set_facecolor("#FFFFFF")
+    ax.set_facecolor("#F6FAFE")
 
     # Plot shops by type.
     type_colors = {
-        "Elite": "#30a2ff",
-        "Strong": "#48c774",
-        "Average": "#ffb347",
-        "Risky": "#ff5c5c",
+        "Elite": "#0B4F8C",
+        "Strong": "#1F77B4",
+        "Average": "#4FA3E3",
+        "Risky": "#9BCBF3",
     }
     for shop_type, color in type_colors.items():
         xs = [s.location[0] for s in sim.shops if s.shop_type == shop_type]
         ys = [s.location[1] for s in sim.shops if s.shop_type == shop_type]
         if xs:
-            ax.scatter(xs, ys, s=30, c=color, alpha=0.8, label=f"{shop_type} shops")
+            ax.scatter(xs, ys, s=34, c=color, alpha=0.9, edgecolors="#FFFFFF", linewidths=0.5, label=f"{shop_type} shops")
 
     # Plot job delivery points and travel paths.
     delivery_x, delivery_y = [], []
@@ -63,10 +63,10 @@ def _plot_network_map(sim, title: str, output_dir: Path, filename: str) -> Path:
                         xytext=(a.location[0], a.location[1]),
                         arrowprops=dict(
                             arrowstyle="-|>",
-                            color="#ff5a00",
-                            lw=2.2,
-                            alpha=0.95,
-                            mutation_scale=18,
+                            color="#1F77B4",
+                            lw=1.8,
+                            alpha=0.7,
+                            mutation_scale=15,
                             shrinkA=2,
                             shrinkB=2,
                         ),
@@ -80,10 +80,10 @@ def _plot_network_map(sim, title: str, output_dir: Path, filename: str) -> Path:
                     xytext=(last.location[0], last.location[1]),
                     arrowprops=dict(
                         arrowstyle="-|>",
-                        color="#00d1ff",
-                        lw=1.8,
-                        alpha=0.85,
-                        mutation_scale=15,
+                        color="#0B4F8C",
+                        lw=1.4,
+                        alpha=0.6,
+                        mutation_scale=13,
                         linestyle="dashed",
                         shrinkA=2,
                         shrinkB=2,
@@ -98,30 +98,32 @@ def _plot_network_map(sim, title: str, output_dir: Path, filename: str) -> Path:
                         ax.plot(
                             [s.location[0], HUB_LOCATION[0]],
                             [s.location[1], HUB_LOCATION[1]],
-                            color="#ffd166",
-                            linewidth=0.4 + 0.25 * checks_per_shop,
-                            alpha=0.25,
+                            color="#6AAFE6",
+                            linewidth=0.35 + 0.18 * checks_per_shop,
+                            alpha=0.2,
                             linestyle=":",
                         )
 
     if delivery_x:
-        ax.scatter(delivery_x, delivery_y, s=24, c="#f7f7f7", alpha=0.65, marker="x", label="Job deliveries")
+        ax.scatter(delivery_x, delivery_y, s=26, c="#0B2A44", alpha=0.8, marker="x", label="Job deliveries")
 
     # Hub marker.
-    ax.scatter([HUB_LOCATION[0]], [HUB_LOCATION[1]], s=120, c="#ffd166", marker="*", label="Quality hub")
+    ax.scatter([HUB_LOCATION[0]], [HUB_LOCATION[1]], s=135, c="#0B4F8C", marker="*", label="Quality hub")
 
-    ax.set_title(title, color="#f2f4f5", fontsize=13, fontweight="bold")
+    ax.set_title(title, color="#0B2A44", fontsize=18, fontweight="bold")
     ax.set_xlim(0, 1)
     ax.set_ylim(0, 1)
-    ax.set_xlabel("X Location", color="#d7dde2")
-    ax.set_ylabel("Y Location", color="#d7dde2")
-    ax.grid(color="#313942", alpha=0.3)
-    ax.tick_params(colors="#d7dde2")
-    for spine in ax.spines.values():
-        spine.set_color("#39424c")
-    leg = ax.legend(facecolor="#171b1f", edgecolor="#39424c", fontsize=8)
+    ax.set_xlabel("X Location", color="#0B2A44", fontsize=13)
+    ax.set_ylabel("Y Location", color="#0B2A44", fontsize=13)
+    ax.tick_params(colors="#16324A", labelsize=11)
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+    ax.spines["left"].set_color("#D4DDE6")
+    ax.spines["bottom"].set_color("#D4DDE6")
+    ax.grid(False)
+    leg = ax.legend(facecolor="#FFFFFF", edgecolor="#FFFFFF", fontsize=10, framealpha=0.95)
     for text in leg.get_texts():
-        text.set_color("#f2f4f5")
+        text.set_color("#0B2A44")
 
     out_path = output_dir / filename
     fig.tight_layout()

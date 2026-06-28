@@ -11,11 +11,34 @@ import matplotlib.gridspec as gridspec
 from pathlib import Path
 
 SHOP_COLORS = {
-    "Elite":   "#2196F3",
-    "Strong":  "#4CAF50",
-    "Average": "#FF9800",
-    "Risky":   "#F44336",
+    "Elite":   "#0B4F8C",
+    "Strong":  "#1F77B4",
+    "Average": "#4FA3E3",
+    "Risky":   "#9BCBF3",
 }
+
+MODE_COLORS = {
+    "primary": "#0B4F8C",
+    "secondary_random": "#2B7DBD",
+    "secondary_quality": "#6AAFE6",
+    "target": "#C8E1F6",
+}
+
+
+def _base_style(fig):
+    fig.patch.set_facecolor("#FFFFFF")
+
+
+def _style_axis(ax, grid_y: bool = False):
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+    ax.spines["left"].set_color("#D4DDE6")
+    ax.spines["bottom"].set_color("#D4DDE6")
+    ax.tick_params(labelsize=11, colors="#16324A")
+    if grid_y:
+        ax.grid(True, axis="y", color="#E8EFF6", linewidth=0.9)
+    else:
+        ax.grid(False)
 
 
 def _smooth(arr: np.ndarray, window: int = 7) -> np.ndarray:
@@ -40,7 +63,8 @@ def plot_shop_statistics(agg: dict, output_dir: str = ".", label: str = ""):
     days = None
 
     fig, axes = plt.subplots(2, 2, figsize=(14, 9))
-    fig.suptitle(f"Shop Statistics{' — ' + label if label else ''}", fontsize=14, fontweight="bold")
+    _base_style(fig)
+    fig.suptitle(f"Shop Statistics{' — ' + label if label else ''}", fontsize=18, fontweight="bold", color="#0B2A44")
 
     # --- 1. Capacity fraction over time (assigned=solid, total incl. busy=dashed) ---
     ax = axes[0, 0]
@@ -55,12 +79,12 @@ def plot_shop_statistics(agg: dict, output_dir: str = ".", label: str = ""):
         ax.plot(days, _smooth(data),  label=f"{st}",       color=color, linewidth=1.8)
         if total is not None:
             ax.plot(days, _smooth(total), linestyle="--", color=color, linewidth=1.2, alpha=0.7)
-    ax.set_title("Mean Daily Worker Utilisation\n(solid = assigned to jobs, dashed = total incl. busy)")
-    ax.set_xlabel("Day")
-    ax.set_ylabel("Fraction of workers occupied")
+    ax.set_title("Mean Daily Worker Utilisation\n(solid = assigned to jobs, dashed = total incl. busy)", fontsize=14, color="#0B2A44")
+    ax.set_xlabel("Day", fontsize=13, color="#0B2A44")
+    ax.set_ylabel("Fraction of workers occupied", fontsize=13, color="#0B2A44")
     ax.set_ylim(0, 1)
-    ax.legend(fontsize=8)
-    ax.grid(True, alpha=0.3)
+    ax.legend(fontsize=10, frameon=False)
+    _style_axis(ax, grid_y=False)
 
     # --- 2. Daily profit per shop type ---
     ax = axes[0, 1]
@@ -70,11 +94,11 @@ def plot_shop_statistics(agg: dict, output_dir: str = ".", label: str = ""):
             continue
         d = np.arange(len(data))
         ax.plot(d, _smooth(data), label=st, color=SHOP_COLORS[st], linewidth=1.8)
-    ax.set_title("Mean Daily Profit per Shop (by type)")
-    ax.set_xlabel("Day")
-    ax.set_ylabel("Profit ($)")
-    ax.legend()
-    ax.grid(True, alpha=0.3)
+    ax.set_title("Mean Daily Profit per Shop (by type)", fontsize=14, color="#0B2A44")
+    ax.set_xlabel("Day", fontsize=13, color="#0B2A44")
+    ax.set_ylabel("Profit ($)", fontsize=13, color="#0B2A44")
+    ax.legend(fontsize=10, frameon=False)
+    _style_axis(ax, grid_y=False)
 
     # --- 3. Total profit mean ---
     ax = axes[1, 0]
@@ -82,9 +106,9 @@ def plot_shop_statistics(agg: dict, output_dir: str = ".", label: str = ""):
     vals = [agg["agg_profit_total_mean"][st] for st in st_present]
     colors = [SHOP_COLORS[st] for st in st_present]
     bars = ax.bar(st_present, vals, color=colors, edgecolor="white", linewidth=0.8)
-    ax.set_title("Total Annual Profit — Mean per Shop (by type)")
-    ax.set_ylabel("Total Profit ($)")
-    ax.grid(True, axis="y", alpha=0.3)
+    ax.set_title("Total Annual Profit — Mean per Shop (by type)", fontsize=14, color="#0B2A44")
+    ax.set_ylabel("Total Profit ($)", fontsize=13, color="#0B2A44")
+    _style_axis(ax, grid_y=True)
     for bar, v in zip(bars, vals):
         ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() * 1.01, f"${v:,.0f}",
                 ha="center", va="bottom", fontsize=9)
@@ -93,9 +117,9 @@ def plot_shop_statistics(agg: dict, output_dir: str = ".", label: str = ""):
     ax = axes[1, 1]
     vals_var = [agg["agg_profit_total_var"].get(st, 0) for st in st_present]
     bars = ax.bar(st_present, vals_var, color=colors, edgecolor="white", linewidth=0.8)
-    ax.set_title("Total Annual Profit — Variance per Shop (by type)")
-    ax.set_ylabel("Profit Variance ($ squared)")
-    ax.grid(True, axis="y", alpha=0.3)
+    ax.set_title("Total Annual Profit — Variance per Shop (by type)", fontsize=14, color="#0B2A44")
+    ax.set_ylabel("Profit Variance ($ squared)", fontsize=13, color="#0B2A44")
+    _style_axis(ax, grid_y=True)
 
     plt.tight_layout()
     fname = out / f"shop_statistics{'_' + label if label else ''}.png"
@@ -127,56 +151,57 @@ def plot_job_statistics(agg: dict, output_dir: str = ".", label: str = ""):
     t_targets   = [agg["t_target_map"].get(jt, 0)  for jt in job_types]
 
     fig, axes = plt.subplots(2, 2, figsize=(14, 9))
-    fig.suptitle(f"Job Statistics{' — ' + label if label else ''}", fontsize=14, fontweight="bold")
+    _base_style(fig)
+    fig.suptitle(f"Job Statistics{' — ' + label if label else ''}", fontsize=18, fontweight="bold", color="#0B2A44")
 
     x = np.arange(len(job_types))
     bar_width = 0.6
 
     # --- 1. Cost means ---
     ax = axes[0, 0]
-    ax.bar(x, cost_means, bar_width, color="#5C6BC0", edgecolor="white")
+    ax.bar(x, cost_means, bar_width, color=MODE_COLORS["primary"], edgecolor="white")
     ax.set_xticks(x)
     ax.set_xticklabels([f"T{jt}" for jt in job_types])
-    ax.set_title("Mean Total Cost per Job Type")
-    ax.set_xlabel("Job Type")
-    ax.set_ylabel("Cost ($)")
-    ax.grid(True, axis="y", alpha=0.3)
+    ax.set_title("Mean Total Cost per Job Type", fontsize=14, color="#0B2A44")
+    ax.set_xlabel("Job Type", fontsize=13, color="#0B2A44")
+    ax.set_ylabel("Cost ($)", fontsize=13, color="#0B2A44")
+    _style_axis(ax, grid_y=True)
 
     # --- 2. Cost variance ---
     ax = axes[0, 1]
-    ax.bar(x, cost_vars, bar_width, color="#AB47BC", edgecolor="white")
+    ax.bar(x, cost_vars, bar_width, color=MODE_COLORS["secondary_random"], edgecolor="white")
     ax.set_xticks(x)
     ax.set_xticklabels([f"T{jt}" for jt in job_types])
-    ax.set_title("Cost Variance per Job Type")
-    ax.set_xlabel("Job Type")
-    ax.set_ylabel("Variance ($ squared)")
-    ax.grid(True, axis="y", alpha=0.3)
+    ax.set_title("Cost Variance per Job Type", fontsize=14, color="#0B2A44")
+    ax.set_xlabel("Job Type", fontsize=13, color="#0B2A44")
+    ax.set_ylabel("Variance ($ squared)", fontsize=13, color="#0B2A44")
+    _style_axis(ax, grid_y=True)
 
     # --- 3. Quality success rate vs. target ---
     ax = axes[1, 0]
-    ax.bar(x - 0.18, qual_rates,  0.35, label="Actual",  color="#26A69A", edgecolor="white")
-    ax.bar(x + 0.18, q_targets,   0.35, label="Target",  color="#80CBC4", edgecolor="white", alpha=0.8)
+    ax.bar(x - 0.18, qual_rates,  0.35, label="Actual",  color=MODE_COLORS["primary"], edgecolor="white")
+    ax.bar(x + 0.18, q_targets,   0.35, label="Target",  color=MODE_COLORS["target"], edgecolor="white", alpha=0.95)
     ax.set_xticks(x)
     ax.set_xticklabels([f"T{jt}" for jt in job_types])
-    ax.set_title("Quality Success Rate vs. Target")
-    ax.set_xlabel("Job Type")
-    ax.set_ylabel("Rate")
+    ax.set_title("Quality Success Rate vs. Target", fontsize=14, color="#0B2A44")
+    ax.set_xlabel("Job Type", fontsize=13, color="#0B2A44")
+    ax.set_ylabel("Rate", fontsize=13, color="#0B2A44")
     ax.set_ylim(0, 1.05)
-    ax.legend()
-    ax.grid(True, axis="y", alpha=0.3)
+    ax.legend(fontsize=10, frameon=False)
+    _style_axis(ax, grid_y=True)
 
     # --- 4. Timeline success rate vs. target ---
     ax = axes[1, 1]
-    ax.bar(x - 0.18, time_rates, 0.35, label="Actual",  color="#FFA726", edgecolor="white")
-    ax.bar(x + 0.18, t_targets,  0.35, label="Target",  color="#FFCC80", edgecolor="white", alpha=0.8)
+    ax.bar(x - 0.18, time_rates, 0.35, label="Actual",  color=MODE_COLORS["secondary_random"], edgecolor="white")
+    ax.bar(x + 0.18, t_targets,  0.35, label="Target",  color=MODE_COLORS["target"], edgecolor="white", alpha=0.95)
     ax.set_xticks(x)
     ax.set_xticklabels([f"T{jt}" for jt in job_types])
-    ax.set_title("Timeline Success Rate vs. Target")
-    ax.set_xlabel("Job Type")
-    ax.set_ylabel("Rate")
+    ax.set_title("Timeline Success Rate vs. Target", fontsize=14, color="#0B2A44")
+    ax.set_xlabel("Job Type", fontsize=13, color="#0B2A44")
+    ax.set_ylabel("Rate", fontsize=13, color="#0B2A44")
     ax.set_ylim(0, 1.05)
-    ax.legend()
-    ax.grid(True, axis="y", alpha=0.3)
+    ax.legend(fontsize=10, frameon=False)
+    _style_axis(ax, grid_y=True)
 
     plt.tight_layout()
     fname = out / f"job_statistics{'_' + label if label else ''}.png"
@@ -201,25 +226,26 @@ def plot_success_rates_vs_targets(agg: dict, output_dir: str = ".", label: str =
     time_rates = np.array([agg["agg_timeline_rate"].get(jt, 0) for jt in job_types])
 
     fig, axes = plt.subplots(1, 2, figsize=(12, 5))
-    fig.suptitle(f"Success Rates vs. Required Targets{' — ' + label if label else ''}", fontsize=13, fontweight="bold")
+    _base_style(fig)
+    fig.suptitle(f"Success Rates vs. Required Targets{' — ' + label if label else ''}", fontsize=17, fontweight="bold", color="#0B2A44")
 
     for ax, actual, target, title, color in [
-        (axes[0], qual_rates,  q_targets, "Quality",  "#26A69A"),
-        (axes[1], time_rates,  t_targets, "Timeline", "#FFA726"),
+        (axes[0], qual_rates,  q_targets, "Quality",  MODE_COLORS["primary"]),
+        (axes[1], time_rates,  t_targets, "Timeline", MODE_COLORS["secondary_random"]),
     ]:
         lo = min(target.min(), actual.min()) - 0.02
         hi = max(target.max(), actual.max()) + 0.02
-        ax.plot([lo, hi], [lo, hi], "k--", linewidth=1, label="Perfect")
+        ax.plot([lo, hi], [lo, hi], "--", linewidth=1.4, color="#A3B8CC", label="Perfect")
         sc = ax.scatter(target, actual, c=[i + 1 for i in range(len(job_types))],
                         cmap="tab10", s=90, zorder=5)
         for i, jt in enumerate(job_types):
             ax.annotate(f"T{jt}", (target[i], actual[i]),
                         textcoords="offset points", xytext=(5, 5), fontsize=8)
-        ax.set_xlabel("Required Target Rate")
-        ax.set_ylabel("Actual Rate")
-        ax.set_title(f"{title} Success Rate")
-        ax.legend()
-        ax.grid(True, alpha=0.3)
+        ax.set_xlabel("Required Target Rate", fontsize=13, color="#0B2A44")
+        ax.set_ylabel("Actual Rate", fontsize=13, color="#0B2A44")
+        ax.set_title(f"{title} Success Rate", fontsize=14, color="#0B2A44")
+        ax.legend(fontsize=10, frameon=False)
+        _style_axis(ax, grid_y=False)
 
     plt.tight_layout()
     fname = out / f"success_vs_targets{'_' + label if label else ''}.png"
@@ -245,7 +271,8 @@ def plot_comparison(agg_primary: dict, agg_secondary_rand: dict, agg_secondary_q
     w = 0.22
 
     fig, axes = plt.subplots(1, 2, figsize=(14, 5))
-    fig.suptitle("Mode Comparison: Quality & Timeline Success Rates", fontsize=13, fontweight="bold")
+    _base_style(fig)
+    fig.suptitle("Mode Comparison: Quality & Timeline Success Rates", fontsize=17, fontweight="bold", color="#0B2A44")
 
     for ax, key, title in [
         (axes[0], "agg_quality_rate",  "Quality Success Rate"),
@@ -255,20 +282,20 @@ def plot_comparison(agg_primary: dict, agg_secondary_rand: dict, agg_secondary_q
         sr = [agg_secondary_rand.get(key, {}).get(jt, 0)   for jt in job_types]
         sq = [agg_secondary_qual.get(key, {}).get(jt, 0)   for jt in job_types]
 
-        ax.bar(x - w, p,  w, label="Primary",          color="#5C6BC0", edgecolor="white")
-        ax.bar(x,     sr, w, label="Sec: Random",      color="#26A69A", edgecolor="white")
-        ax.bar(x + w, sq, w, label="Sec: Quality-top", color="#FFA726", edgecolor="white")
+        ax.bar(x - w, p,  w, label="Primary",          color=MODE_COLORS["primary"], edgecolor="white")
+        ax.bar(x,     sr, w, label="Sec: Random",      color=MODE_COLORS["secondary_random"], edgecolor="white")
+        ax.bar(x + w, sq, w, label="Sec: Quality-top", color=MODE_COLORS["secondary_quality"], edgecolor="white")
         ax.set_xticks(x)
         ax.set_xticklabels([f"T{jt}" for jt in job_types])
-        ax.set_title(title)
-        ax.set_xlabel("Job Type")
-        ax.set_ylabel("Rate")
+        ax.set_title(title, fontsize=14, color="#0B2A44")
+        ax.set_xlabel("Job Type", fontsize=13, color="#0B2A44")
+        ax.set_ylabel("Rate", fontsize=13, color="#0B2A44")
         if title == "Quality Success Rate":
             ax.set_ylim(0.7, 1.05)
         else:
             ax.set_ylim(0, 1.05)
-        ax.legend(fontsize=8)
-        ax.grid(True, axis="y", alpha=0.3)
+        ax.legend(fontsize=10, frameon=False)
+        _style_axis(ax, grid_y=True)
 
     plt.tight_layout()
     fname = out / "mode_comparison.png"
@@ -295,7 +322,8 @@ def plot_shop_comparison(agg_primary: dict, agg_secondary_rand: dict, agg_second
     ]
 
     fig, axes = plt.subplots(4, 3, figsize=(18, 16))
-    fig.suptitle("Shop Statistics — All Modes Compared", fontsize=15, fontweight="bold")
+    _base_style(fig)
+    fig.suptitle("Shop Statistics — All Modes Compared", fontsize=18, fontweight="bold", color="#0B2A44")
 
     row_titles = [
         "Mean Daily Capacity Utilisation",
@@ -322,9 +350,9 @@ def plot_shop_comparison(agg_primary: dict, agg_secondary_rand: dict, agg_second
         ax.set_ylim(0, 1)
         ax.set_xlabel("Day")
         if col == 0:
-            ax.set_ylabel(row_titles[0], fontsize=9)
-            ax.legend(fontsize=8)
-        ax.grid(True, alpha=0.3)
+            ax.set_ylabel(row_titles[0], fontsize=12, color="#0B2A44")
+            ax.legend(fontsize=9, frameon=False)
+        _style_axis(ax, grid_y=False)
 
         # Row 1: Daily profit
         ax = axes[1, col]
@@ -336,9 +364,9 @@ def plot_shop_comparison(agg_primary: dict, agg_secondary_rand: dict, agg_second
             ax.plot(d, _smooth(data), label=st, color=SHOP_COLORS[st], linewidth=1.6)
         ax.set_xlabel("Day")
         if col == 0:
-            ax.set_ylabel(row_titles[1], fontsize=9)
-            ax.legend(fontsize=8)
-        ax.grid(True, alpha=0.3)
+            ax.set_ylabel(row_titles[1], fontsize=12, color="#0B2A44")
+            ax.legend(fontsize=9, frameon=False)
+        _style_axis(ax, grid_y=False)
 
         # Row 2: Total profit mean (bar)
         ax = axes[2, col]
@@ -347,8 +375,8 @@ def plot_shop_comparison(agg_primary: dict, agg_secondary_rand: dict, agg_second
         colors = [SHOP_COLORS[st] for st in st_present]
         bars = ax.bar(st_present, vals, color=colors, edgecolor="white")
         if col == 0:
-            ax.set_ylabel(row_titles[2], fontsize=9)
-        ax.grid(True, axis="y", alpha=0.3)
+            ax.set_ylabel(row_titles[2], fontsize=12, color="#0B2A44")
+        _style_axis(ax, grid_y=True)
         for bar, v in zip(bars, vals):
             ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() * 1.01,
                     f"${v:,.0f}", ha="center", va="bottom", fontsize=7)
@@ -358,8 +386,8 @@ def plot_shop_comparison(agg_primary: dict, agg_secondary_rand: dict, agg_second
         vals_var = [agg.get("agg_profit_total_var", {}).get(st, 0) for st in st_present]
         bars = ax.bar(st_present, vals_var, color=colors, edgecolor="white")
         if col == 0:
-            ax.set_ylabel(row_titles[3], fontsize=9)
-        ax.grid(True, axis="y", alpha=0.3)
+            ax.set_ylabel(row_titles[3], fontsize=12, color="#0B2A44")
+        _style_axis(ax, grid_y=True)
 
     plt.tight_layout(rect=[0, 0, 1, 0.97])
     fname = out / "shop_comparison_all_modes.png"
@@ -390,13 +418,14 @@ def plot_job_cost_comparison(agg_primary: dict, agg_secondary_rand: dict, agg_se
     w = 0.25   # bar width
 
     modes = [
-        (agg_primary,        "Primary",              "#5C6BC0"),
-        (agg_secondary_rand, "Secondary: Random",    "#26A69A"),
-        (agg_secondary_qual, "Secondary: Qual-Top",  "#FFA726"),
+        (agg_primary,        "Primary",              MODE_COLORS["primary"]),
+        (agg_secondary_rand, "Secondary: Random",    MODE_COLORS["secondary_random"]),
+        (agg_secondary_qual, "Secondary: Qual-Top",  MODE_COLORS["secondary_quality"]),
     ]
 
     fig, axes = plt.subplots(2, 1, figsize=(14, 10))
-    fig.suptitle("Job Cost Comparison Across Simulation Modes", fontsize=14, fontweight="bold")
+    _base_style(fig)
+    fig.suptitle("Job Cost Comparison Across Simulation Modes", fontsize=18, fontweight="bold", color="#0B2A44")
 
     # --- Top: mean cost ---
     ax = axes[0]
@@ -407,11 +436,11 @@ def plot_job_cost_comparison(agg_primary: dict, agg_secondary_rand: dict, agg_se
 
     ax.set_xticks(x)
     ax.set_xticklabels([f"T{jt}" for jt in job_types])
-    ax.set_title("Mean Total Cost per Job Type")
-    ax.set_xlabel("Job Type")
-    ax.set_ylabel("Mean Cost ($)")
-    ax.legend()
-    ax.grid(True, axis="y", alpha=0.3)
+    ax.set_title("Mean Total Cost per Job Type", fontsize=14, color="#0B2A44")
+    ax.set_xlabel("Job Type", fontsize=13, color="#0B2A44")
+    ax.set_ylabel("Mean Cost ($)", fontsize=13, color="#0B2A44")
+    ax.legend(fontsize=10, frameon=False)
+    _style_axis(ax, grid_y=True)
 
     # Add value labels on top of each bar
     for i, (agg, label, color) in enumerate(modes):
@@ -431,11 +460,11 @@ def plot_job_cost_comparison(agg_primary: dict, agg_secondary_rand: dict, agg_se
 
     ax.set_xticks(x)
     ax.set_xticklabels([f"T{jt}" for jt in job_types])
-    ax.set_title("Cost Variance per Job Type")
-    ax.set_xlabel("Job Type")
-    ax.set_ylabel("Variance ($ squared)")
-    ax.legend()
-    ax.grid(True, axis="y", alpha=0.3)
+    ax.set_title("Cost Variance per Job Type", fontsize=14, color="#0B2A44")
+    ax.set_xlabel("Job Type", fontsize=13, color="#0B2A44")
+    ax.set_ylabel("Variance ($ squared)", fontsize=13, color="#0B2A44")
+    ax.legend(fontsize=10, frameon=False)
+    _style_axis(ax, grid_y=True)
 
     plt.tight_layout()
     fname = out / "job_cost_comparison.png"
@@ -457,16 +486,17 @@ def plot_mode_operational_comparison(agg_primary: dict, agg_secondary_rand: dict
 
     shop_types = ["Elite", "Strong", "Average", "Risky"]
     modes = [
-        (agg_primary, "Primary", "#5C6BC0"),
-        (agg_secondary_rand, "Secondary: Random", "#26A69A"),
-        (agg_secondary_qual, "Secondary: Qual-Top", "#FFA726"),
+        (agg_primary, "Primary", MODE_COLORS["primary"]),
+        (agg_secondary_rand, "Secondary: Random", MODE_COLORS["secondary_random"]),
+        (agg_secondary_qual, "Secondary: Qual-Top", MODE_COLORS["secondary_quality"]),
     ]
 
     x = np.arange(len(shop_types))
     width = 0.25
 
     fig, axes = plt.subplots(1, 2, figsize=(15, 5.5))
-    fig.suptitle("Mode Comparison: Shop Usage and Days Late", fontsize=14, fontweight="bold")
+    _base_style(fig)
+    fig.suptitle("Mode Comparison: Shop Usage and Days Late", fontsize=18, fontweight="bold", color="#0B2A44")
 
     ax = axes[0]
     for idx, (agg, label, color) in enumerate(modes):
@@ -475,21 +505,21 @@ def plot_mode_operational_comparison(agg_primary: dict, agg_secondary_rand: dict
         ax.bar(x + offset, vals, width, label=label, color=color, edgecolor="white")
     ax.set_xticks(x)
     ax.set_xticklabels(shop_types)
-    ax.set_title("Average Shop Assignments per Run\n(total assignments for one single-allocation job sums to 1)")
-    ax.set_xlabel("Shop Type")
-    ax.set_ylabel("Assignments")
-    ax.legend(fontsize=8)
-    ax.grid(True, axis="y", alpha=0.3)
+    ax.set_title("Average Shop Assignments per Run\n(total assignments for one single-allocation job sums to 1)", fontsize=14, color="#0B2A44")
+    ax.set_xlabel("Shop Type", fontsize=13, color="#0B2A44")
+    ax.set_ylabel("Assignments", fontsize=13, color="#0B2A44")
+    ax.legend(fontsize=10, frameon=False)
+    _style_axis(ax, grid_y=True)
 
     ax = axes[1]
     mode_labels = [label for _, label, _ in modes]
     mode_colors = [color for _, _, color in modes]
     values = [agg.get("agg_avg_days_late", 0.0) for agg, _, _ in modes]
     bars = ax.bar(mode_labels, values, color=mode_colors, edgecolor="white")
-    ax.set_title("Average Days Late by Mode\n(per job type per run, then averaged across runs)")
-    ax.set_xlabel("Mode")
-    ax.set_ylabel("Days Late")
-    ax.grid(True, axis="y", alpha=0.3)
+    ax.set_title("Average Days Late by Mode\n(per job type per run, then averaged across runs)", fontsize=14, color="#0B2A44")
+    ax.set_xlabel("Mode", fontsize=13, color="#0B2A44")
+    ax.set_ylabel("Days Late", fontsize=13, color="#0B2A44")
+    _style_axis(ax, grid_y=True)
     for bar, value in zip(bars, values):
         ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() * 1.01 + 0.01,
                 f"{value:.2f}", ha="center", va="bottom", fontsize=8)
