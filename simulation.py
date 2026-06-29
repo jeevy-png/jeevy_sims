@@ -72,6 +72,12 @@ def _expected_plan_metrics(comp: JobComponent, plan: list[Shop]) -> tuple[float,
     return expected_cost, expected_timeline_days
 
 
+def _primary_timeline_feasible(comp: JobComponent, shop: Shop, max_delay_factor: float) -> bool:
+    timeline_limit = max(1.0, float(comp.days_remaining) * max(0.0, float(max_delay_factor)))
+    primary_days = 1.0 + expected_days_to_complete(comp, shop)
+    return primary_days <= timeline_limit
+
+
 def _component_plan_options(
     comp: JobComponent,
     primary: Shop,
@@ -116,6 +122,7 @@ def find_best_shop(
     avoid_shop_ids: Optional[set[int]] = None,
     backup_shop_depth: int = 3,
     max_delay_factor: float = 1.0,
+    enforce_first_layer_timeline_filter: bool = False,
 ) -> Optional[Shop]:
     """
     1. Filter to shops with free capacity.
@@ -139,6 +146,8 @@ def find_best_shop(
 
     for primary in candidate_pool:
         if primary.work_efficiency < comp.timeline_reliability_target:
+            continue
+        if enforce_first_layer_timeline_filter and not _primary_timeline_feasible(comp, primary, max_delay_factor):
             continue
 
         plan = [primary]
@@ -232,6 +241,7 @@ class SimulationRun:
         job_config: Optional[dict] = None,
         backup_shop_depth: int = 3,
         allocation_planner_mode: str = "fast",
+        enforce_first_layer_timeline_filter: bool = False,
     ):
         self.num_shops = num_shops
         self.num_days = num_days
@@ -248,6 +258,7 @@ class SimulationRun:
         self.job_config = job_config
         self.backup_shop_depth = max(1, int(backup_shop_depth))
         self.allocation_planner_mode = allocation_planner_mode if allocation_planner_mode in ("fast", "thorough") else "fast"
+        self.enforce_first_layer_timeline_filter = bool(enforce_first_layer_timeline_filter)
         self.rng = np.random.default_rng(rng_seed)
 
         # State
@@ -391,6 +402,7 @@ class SimulationRun:
             avoid_shop_ids=avoid,
             backup_shop_depth=self.backup_shop_depth,
             max_delay_factor=self.max_delay_factor,
+            enforce_first_layer_timeline_filter=self.enforce_first_layer_timeline_filter,
         )
         return candidate is not None
 
@@ -501,6 +513,11 @@ class SimulationRun:
             # Bounded candidate pool for combinatorial planning.
             baseline_comp = comps[0]
             available_shops = [s for s in self.shops if slots_by_shop.get(s.shop_id, 0) > 0 and s.can_accept(baseline_comp)]
+            if self.enforce_first_layer_timeline_filter:
+                available_shops = [
+                    s for s in available_shops
+                    if _primary_timeline_feasible(baseline_comp, s, self.max_delay_factor)
+                ]
             if not available_shops:
                 remaining.extend(comps)
                 continue
@@ -543,6 +560,9 @@ class SimulationRun:
                 per_comp_options: list[list[tuple[list[Shop], float, float]]] = []
                 invalid = False
                 for comp, primary in zip(comps, assignment):
+                    if self.enforce_first_layer_timeline_filter and not _primary_timeline_feasible(comp, primary, self.max_delay_factor):
+                        invalid = True
+                        break
                     opts = _component_plan_options(
                         comp=comp,
                         primary=primary,
@@ -602,6 +622,7 @@ class SimulationRun:
                 avoid_shop_ids={comp.prev_shop.shop_id} if comp.prev_shop is not None else set(),
                 backup_shop_depth=self.backup_shop_depth,
                 max_delay_factor=self.max_delay_factor,
+                enforce_first_layer_timeline_filter=self.enforce_first_layer_timeline_filter,
             )
             if best is None:
                 remaining.append(comp)

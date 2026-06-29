@@ -152,6 +152,7 @@ def _settings_dir() -> Path:
 def _collect_settings(case_mode, runs, shops, days, jobs_per_day, seed,
                        quality_checks, max_delay_factor, failure_penalty_rate, backup_shop_depth,
                        allocation_planner_mode,
+                       enforce_first_layer_timeline_filter,
                        use_util_overrides, capacity_utilization_mean, capacity_utilization_std,
                        job_generation_mode, job_generation_probability, job_generation_days,
                        output_base, shop_type_params_override, job_config_override,
@@ -168,6 +169,7 @@ def _collect_settings(case_mode, runs, shops, days, jobs_per_day, seed,
         "failure_penalty_rate": float(failure_penalty_rate),
         "backup_shop_depth": int(backup_shop_depth),
         "allocation_planner_mode": allocation_planner_mode,
+        "enforce_first_layer_timeline_filter": bool(enforce_first_layer_timeline_filter),
         "use_util_overrides": bool(use_util_overrides),
         "capacity_utilization_mean": capacity_utilization_mean,
         "capacity_utilization_std": capacity_utilization_std,
@@ -196,6 +198,7 @@ def _apply_loaded_settings_to_session_state(loaded: dict):
         "failure_penalty_rate": "failure_penalty_rate",
         "backup_shop_depth": "backup_shop_depth",
         "allocation_planner_mode": "allocation_planner_mode",
+        "enforce_first_layer_timeline_filter": "enforce_first_layer_timeline_filter",
         "use_util_overrides": "use_util_overrides",
         "capacity_utilization_mean": "capacity_utilization_mean",
         "capacity_utilization_std": "capacity_utilization_std",
@@ -465,6 +468,7 @@ def _run_primary(
     job_config: Optional[dict],
     output_dir: str,
     allocation_planner_mode: str = "fast",
+    enforce_first_layer_timeline_filter: bool = False,
     text_overrides: Optional[dict[str, str]] = None,
 ) -> tuple[dict, list[SimulationRun]]:
     all_stats = []
@@ -487,6 +491,7 @@ def _run_primary(
             shop_type_params_override=shop_type_params_override,
             job_config=job_config,
             allocation_planner_mode=allocation_planner_mode,
+            enforce_first_layer_timeline_filter=enforce_first_layer_timeline_filter,
         )
         sim.run()
         all_stats.append(sim.get_statistics())
@@ -624,6 +629,12 @@ def main():
             key="allocation_planner_mode",
             help="fast = quicker bounded search; thorough = deeper combo search, slower.",
         )
+        enforce_first_layer_timeline_filter = st.checkbox(
+            "Filter out first-layer shops that miss timeline requirement",
+            value=bool(_d("enforce_first_layer_timeline_filter", False)),
+            key="enforce_first_layer_timeline_filter",
+            help="When enabled, primary shops that cannot meet the timeline window on their own are excluded before combo evaluation.",
+        )
 
         st.subheader("Capacity Utilization")
         use_util_overrides = st.checkbox("Override Utilization Mean/Std for all shop types", value=bool(_d("use_util_overrides", False)), key="use_util_overrides")
@@ -725,6 +736,7 @@ def main():
                     case_mode, runs, shops, days, jobs_per_day, seed,
                     quality_checks, max_delay_factor, failure_penalty_rate, backup_shop_depth,
                     allocation_planner_mode,
+                    enforce_first_layer_timeline_filter,
                     use_util_overrides, capacity_utilization_mean, capacity_utilization_std,
                     job_generation_mode, job_generation_probability, custom_days_selection,
                     output_base, shop_type_params_override, job_config_override,
@@ -738,6 +750,7 @@ def main():
                 case_mode, runs, shops, days, jobs_per_day, seed,
                 quality_checks, max_delay_factor, failure_penalty_rate, backup_shop_depth,
                 allocation_planner_mode,
+                enforce_first_layer_timeline_filter,
                 use_util_overrides, capacity_utilization_mean, capacity_utilization_std,
                 job_generation_mode, job_generation_probability, custom_days_selection,
                 output_base, shop_type_params_override, job_config_override,
@@ -814,6 +827,7 @@ def main():
                             job_config=job_config_override,
                             output_dir=str(output_dir),
                             allocation_planner_mode=allocation_planner_mode,
+                            enforce_first_layer_timeline_filter=enforce_first_layer_timeline_filter,
                             text_overrides=plot_text_overrides,
                         )
                         # Re-label primary figures to match dashboard terminology.
