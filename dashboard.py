@@ -526,6 +526,7 @@ def _run_secondary(
     results: dict[str, dict[str, object]] = {}
     for method in methods:
         all_stats = []
+        all_jobs = []
         exemplar_sim: Optional[SecondarySimulationRun] = None
         for r in range(runs):
             method_seed = seed + 1000 + r + (500 if method == "quality_top" else 0)
@@ -547,11 +548,12 @@ def _run_secondary(
             )
             sim.run()
             all_stats.append(sim.get_statistics())
+            all_jobs.extend(sim.jobs.values())
             if exemplar_sim is None:
                 exemplar_sim = sim
 
         agg = aggregate_runs(all_stats)
-        results[method] = {"agg": agg, "sim": exemplar_sim}
+        results[method] = {"agg": agg, "sim": exemplar_sim, "jobs": all_jobs}
         label = "BaseCase" if method == "random_cheapest" else "PartialNetwork"
         plot_shop_statistics(agg, output_dir=output_dir, label=label, text_overrides=text_overrides)
         plot_job_statistics(agg, output_dir=output_dir, label=label, text_overrides=text_overrides)
@@ -591,6 +593,111 @@ def _quality_audit_rows(label: str, agg: Optional[dict]) -> list[dict]:
             "quality_success_rate": round(rate, 4),
         }
     ]
+
+
+def _mean_mode_cost(agg: Optional[dict]) -> Optional[float]:
+    if not agg:
+        return None
+    vals = list((agg.get("agg_cost_mean") or {}).values())
+    if not vals:
+        return None
+    return float(sum(vals) / max(1, len(vals)))
+
+
+def _main_timeline_failure_cause(jobs: list) -> str:
+    causes: dict[str, int] = {}
+    for job in jobs:
+        if getattr(job, "timeline_success", False):
+            continue
+        if not getattr(job, "completed", False):
+            key = "Unfinished by simulation horizon"
+        elif getattr(job, "days_late", 0) > 0:
+            key = "Completed after deadline"
+        else:
+            key = "Completed within deadline but missed 2-day timeline buffer"
+        causes[key] = causes.get(key, 0) + 1
+    if not causes:
+        return "No timeline failures observed"
+    return max(causes.items(), key=lambda x: x[1])[0]
+
+
+def _main_quality_failure_cause(jobs: list) -> str:
+    causes: dict[str, int] = {}
+    for job in jobs:
+        if getattr(job, "completed", False) and getattr(job, "quality_success", False):
+            continue
+        if not getattr(job, "completed", False):
+            key = "Unfinished by simulation horizon"
+        elif any(getattr(comp, "quality_failed", False) for comp in getattr(job, "components", [])):
+            key = "Exceeded max-delay window after repeated quality reroutes"
+        else:
+            key = "Final quality check failure"
+        causes[key] = causes.get(key, 0) + 1
+    if not causes:
+        return "No quality failures observed"
+    return max(causes.items(), key=lambda x: x[1])[0]
+
+
+def _build_run_summary_text(
+    agg_primary: Optional[dict],
+    primary_sims: Optional[list[SimulationRun]],
+    agg_secondary: Optional[dict],
+) -> str:
+    mode_costs: list[tuple[str, float]] = []
+    all_jobs = []
+
+    rerouted_jobs = 0
+    reroute_events = 0
+    if primary_sims:
+        for sim in primary_sims:
+            for job in sim.jobs.values():
+                all_jobs.append(job)
+                job_rerouted = False
+                for comp in job.components:
+                    events = max(0, len(getattr(comp, "shop_assignment_history", [])) - 1)
+                    reroute_events += events
+                    if events > 0:
+                        job_rerouted = True
+                if job_rerouted:
+                    rerouted_jobs += 1
+
+    c = _mean_mode_cost(agg_primary)
+    if c is not None:
+        mode_costs.append(("Full Network", c))
+
+    if agg_secondary:
+        base = (agg_secondary.get("random_cheapest") or {}).get("agg")
+        partial = (agg_secondary.get("quality_top") or {}).get("agg")
+        base_jobs = (agg_secondary.get("random_cheapest") or {}).get("jobs") or []
+        partial_jobs = (agg_secondary.get("quality_top") or {}).get("jobs") or []
+        all_jobs.extend(base_jobs)
+        all_jobs.extend(partial_jobs)
+        bc = _mean_mode_cost(base)
+        pc = _mean_mode_cost(partial)
+        if bc is not None:
+            mode_costs.append(("Base Case", bc))
+        if pc is not None:
+            mode_costs.append(("Partial Network", pc))
+
+    if mode_costs:
+        cheapest_mode = min(mode_costs, key=lambda x: x[1])
+        expensive_mode = max(mode_costs, key=lambda x: x[1])
+        cheapest_line = f"{cheapest_mode[0]} (mean cost ${cheapest_mode[1]:,.0f})"
+        expensive_line = f"{expensive_mode[0]} (mean cost ${expensive_mode[1]:,.0f})"
+    else:
+        cheapest_line = "N/A"
+        expensive_line = "N/A"
+
+    timeline_cause = _main_timeline_failure_cause(all_jobs)
+    quality_cause = _main_quality_failure_cause(all_jobs)
+
+    return (
+        f"Jobs rerouted: {rerouted_jobs} jobs ({reroute_events} total reroute events)\n"
+        f"Cheapest mode: {cheapest_line}\n"
+        f"Most expensive mode: {expensive_line}\n"
+        f"Main cause of timeline failures: {timeline_cause}\n"
+        f"Main cause of quality failures: {quality_cause}"
+    )
 
 
 def main():
@@ -805,6 +912,7 @@ def main():
                 with st.spinner("Running simulation..."):
                     agg_primary = None
                     agg_secondary = None
+                    primary_sims: list[SimulationRun] = []
                     map_paths: list[Path] = []
 
                     if case_mode in ("full network", "all cases"):
@@ -927,9 +1035,19 @@ def main():
                     "primary": agg_primary,
                     "secondary": agg_secondary,
                 }
+                st.session_state["last_summary_text"] = _build_run_summary_text(
+                    agg_primary=agg_primary,
+                    primary_sims=primary_sims,
+                    agg_secondary=agg_secondary,
+                )
                 st.success(f"Run complete. Plots saved to: {output_dir}")
             except Exception as exc:
                 st.error(f"Run failed: {exc}")
+
+        summary_text = st.session_state.get("last_summary_text")
+        if summary_text:
+            st.subheader("Run Summary")
+            st.text_area("High-level run insights", value=summary_text, height=170, disabled=True)
 
         quality_audit = st.session_state.get("last_quality_audit")
         if quality_audit:
