@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import inspect
 import json
 from pathlib import Path
 from typing import Optional
@@ -473,8 +474,12 @@ def _run_primary(
 ) -> tuple[dict, list[SimulationRun]]:
     all_stats = []
     run_sims: list[SimulationRun] = []
+    simulation_init_params = inspect.signature(SimulationRun.__init__).parameters
+    supports_allocation_planner_mode = "allocation_planner_mode" in simulation_init_params
+    supports_first_layer_timeline_filter = "enforce_first_layer_timeline_filter" in simulation_init_params
+
     for r in range(runs):
-        sim = SimulationRun(
+        sim_kwargs = dict(
             num_shops=shops,
             num_days=days,
             jobs_per_day=jobs_per_day,
@@ -490,9 +495,15 @@ def _run_primary(
             job_generation_days=job_generation_days,
             shop_type_params_override=shop_type_params_override,
             job_config=job_config,
-            allocation_planner_mode=allocation_planner_mode,
-            enforce_first_layer_timeline_filter=enforce_first_layer_timeline_filter,
         )
+
+        # Backward compatibility for hosted environments temporarily running older simulation.py.
+        if supports_allocation_planner_mode:
+            sim_kwargs["allocation_planner_mode"] = allocation_planner_mode
+        if supports_first_layer_timeline_filter:
+            sim_kwargs["enforce_first_layer_timeline_filter"] = enforce_first_layer_timeline_filter
+
+        sim = SimulationRun(**sim_kwargs)
         sim.run()
         all_stats.append(sim.get_statistics())
         run_sims.append(sim)
