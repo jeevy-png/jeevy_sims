@@ -738,11 +738,13 @@ def _build_run_summary_text(
     mode_costs: list[tuple[str, float]] = []
     all_jobs = []
 
-    rerouted_jobs = 0
-    reroute_events = 0
+    total_primary_jobs = 0
+    rerouted_jobs = 0  # unique jobs with at least one reroute
+    reroute_events = 0  # total reroute events across all components/jobs
     if primary_sims:
         for sim in primary_sims:
             for job in sim.jobs.values():
+                total_primary_jobs += 1
                 all_jobs.append(job)
                 job_rerouted = False
                 for comp in job.components:
@@ -752,6 +754,10 @@ def _build_run_summary_text(
                         job_rerouted = True
                 if job_rerouted:
                     rerouted_jobs += 1
+
+    reroute_pct = (100.0 * rerouted_jobs / total_primary_jobs) if total_primary_jobs > 0 else 0.0
+    avg_reroutes_per_job = (reroute_events / total_primary_jobs) if total_primary_jobs > 0 else 0.0
+    avg_reroutes_per_rerouted_job = (reroute_events / rerouted_jobs) if rerouted_jobs > 0 else 0.0
 
     c = _mean_mode_cost(agg_primary)
     if c is not None:
@@ -784,7 +790,12 @@ def _build_run_summary_text(
     quality_cause = _main_quality_failure_cause(all_jobs)
 
     return (
-        f"Jobs rerouted: {rerouted_jobs} jobs ({reroute_events} total reroute events)\n"
+        f"Primary jobs (total): {total_primary_jobs}\n"
+        f"Primary jobs rerouted (unique): {rerouted_jobs}\n"
+        f"Primary reroute events (total): {reroute_events}\n"
+        f"Primary rerouted jobs (%): {reroute_pct:.1f}%\n"
+        f"Primary avg reroutes per job: {avg_reroutes_per_job:.2f}\n"
+        f"Primary avg reroutes per rerouted job: {avg_reroutes_per_rerouted_job:.2f}\n"
         f"Cheapest mode: {cheapest_line}\n"
         f"Most expensive mode: {expensive_line}\n"
         f"Main cause of timeline failures: {timeline_cause}\n"
