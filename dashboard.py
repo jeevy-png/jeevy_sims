@@ -11,6 +11,7 @@ import pandas as pd
 import streamlit as st
 
 from plotting import (
+    plot_primary_quality_check_sweep,
     plot_completed_only_quality_rate,
     plot_comparison,
     plot_job_cost_comparison,
@@ -155,6 +156,7 @@ def _collect_settings(case_mode, runs, shops, days, jobs_per_day, seed,
                        quality_checks, max_delay_factor, failure_penalty_rate, backup_shop_depth,
                        allocation_planner_mode,
                        enforce_first_layer_timeline_filter,
+                       enable_quality_check_sweep, sweep_quality_checks_min, sweep_quality_checks_max,
                        use_util_overrides, capacity_utilization_mean, capacity_utilization_std,
                        job_generation_mode, job_generation_probability, job_generation_days,
                        output_base, shop_type_params_override, job_config_override,
@@ -172,6 +174,9 @@ def _collect_settings(case_mode, runs, shops, days, jobs_per_day, seed,
         "backup_shop_depth": int(backup_shop_depth),
         "allocation_planner_mode": allocation_planner_mode,
         "enforce_first_layer_timeline_filter": bool(enforce_first_layer_timeline_filter),
+        "enable_quality_check_sweep": bool(enable_quality_check_sweep),
+        "sweep_quality_checks_min": int(sweep_quality_checks_min),
+        "sweep_quality_checks_max": int(sweep_quality_checks_max),
         "use_util_overrides": bool(use_util_overrides),
         "capacity_utilization_mean": capacity_utilization_mean,
         "capacity_utilization_std": capacity_utilization_std,
@@ -201,6 +206,9 @@ def _apply_loaded_settings_to_session_state(loaded: dict):
         "backup_shop_depth": "backup_shop_depth",
         "allocation_planner_mode": "allocation_planner_mode",
         "enforce_first_layer_timeline_filter": "enforce_first_layer_timeline_filter",
+        "enable_quality_check_sweep": "enable_quality_check_sweep",
+        "sweep_quality_checks_min": "sweep_quality_checks_min",
+        "sweep_quality_checks_max": "sweep_quality_checks_max",
         "use_util_overrides": "use_util_overrides",
         "capacity_utilization_mean": "capacity_utilization_mean",
         "capacity_utilization_std": "capacity_utilization_std",
@@ -471,6 +479,7 @@ def _run_primary(
     output_dir: str,
     allocation_planner_mode: str = "fast",
     enforce_first_layer_timeline_filter: bool = False,
+    generate_plots: bool = True,
     text_overrides: Optional[dict[str, str]] = None,
 ) -> tuple[dict, list[SimulationRun]]:
     all_stats = []
@@ -510,11 +519,80 @@ def _run_primary(
         run_sims.append(sim)
 
     agg = aggregate_runs(all_stats)
-    plot_shop_statistics(agg, output_dir=output_dir, label="Primary", text_overrides=text_overrides)
-    plot_job_statistics(agg, output_dir=output_dir, label="Primary", text_overrides=text_overrides)
-    plot_success_rates_vs_targets(agg, output_dir=output_dir, label="Primary", text_overrides=text_overrides)
-    plot_completed_only_quality_rate(agg, output_dir=output_dir, label="Primary", text_overrides=text_overrides)
+    if generate_plots:
+        plot_shop_statistics(agg, output_dir=output_dir, label="Primary", text_overrides=text_overrides)
+        plot_job_statistics(agg, output_dir=output_dir, label="Primary", text_overrides=text_overrides)
+        plot_success_rates_vs_targets(agg, output_dir=output_dir, label="Primary", text_overrides=text_overrides)
+        plot_completed_only_quality_rate(agg, output_dir=output_dir, label="Primary", text_overrides=text_overrides)
     return agg, run_sims
+
+
+def _mean_metric(values_by_type: dict) -> float:
+    vals = list(values_by_type.values()) if values_by_type else []
+    return float(sum(vals) / len(vals)) if vals else 0.0
+
+
+def _run_primary_quality_check_sweep(
+    checks_min: int,
+    checks_max: int,
+    runs: int,
+    shops: int,
+    days: int,
+    jobs_per_day: int,
+    seed: int,
+    failure_penalty_rate: float,
+    max_delay_factor: float,
+    backup_shop_depth: int,
+    allocation_planner_mode: str,
+    enforce_first_layer_timeline_filter: bool,
+    capacity_utilization_mean: Optional[float],
+    capacity_utilization_std: Optional[float],
+    job_generation_mode: str,
+    job_generation_probability: float,
+    job_generation_days: list[int],
+    shop_type_params_override: Optional[dict[str, dict]],
+    job_config: Optional[dict],
+    output_dir: str,
+    text_overrides: Optional[dict[str, str]] = None,
+):
+    rows = []
+    for qc in range(int(checks_min), int(checks_max) + 1):
+        agg, _ = _run_primary(
+            runs=runs,
+            shops=shops,
+            days=days,
+            jobs_per_day=jobs_per_day,
+            seed=seed,
+            quality_checks=qc,
+            failure_penalty_rate=failure_penalty_rate,
+            max_delay_factor=max_delay_factor,
+            backup_shop_depth=backup_shop_depth,
+            capacity_utilization_mean=capacity_utilization_mean,
+            capacity_utilization_std=capacity_utilization_std,
+            job_generation_mode=job_generation_mode,
+            job_generation_probability=job_generation_probability,
+            job_generation_days=job_generation_days,
+            shop_type_params_override=shop_type_params_override,
+            job_config=job_config,
+            output_dir=output_dir,
+            allocation_planner_mode=allocation_planner_mode,
+            enforce_first_layer_timeline_filter=enforce_first_layer_timeline_filter,
+            generate_plots=False,
+            text_overrides=text_overrides,
+        )
+        total = int(agg.get("quality_total_cases", 0))
+        passed = int(agg.get("quality_passed_cases", 0))
+        rows.append(
+            {
+                "quality_checks": qc,
+                "mean_cost": _mean_metric(agg.get("agg_cost_mean", {})),
+                "quality_success_rate": (passed / total) if total > 0 else 0.0,
+                "timeline_success_rate": _mean_metric(agg.get("agg_timeline_rate", {})),
+            }
+        )
+
+    plot_primary_quality_check_sweep(rows, output_dir=output_dir, label="Primary", text_overrides=text_overrides)
+    return rows
 
 
 def _run_secondary(
@@ -756,6 +834,17 @@ def main():
             key="enforce_first_layer_timeline_filter",
             help="When enabled, primary shops that cannot meet the timeline window on their own are excluded before combo evaluation.",
         )
+        enable_quality_check_sweep = st.checkbox(
+            "Sweep quality checks for primary",
+            value=bool(_d("enable_quality_check_sweep", False)),
+            key="enable_quality_check_sweep",
+            help="Run primary case repeatedly across a quality-check range and plot cost/quality/timeline outcomes.",
+        )
+        sweep_quality_checks_min = int(_d("sweep_quality_checks_min", 1))
+        sweep_quality_checks_max = int(_d("sweep_quality_checks_max", 6))
+        if enable_quality_check_sweep:
+            sweep_quality_checks_min = int(st.number_input("Sweep min quality checks", min_value=1, max_value=20, value=sweep_quality_checks_min, step=1, key="sweep_quality_checks_min"))
+            sweep_quality_checks_max = int(st.number_input("Sweep max quality checks", min_value=sweep_quality_checks_min, max_value=20, value=max(sweep_quality_checks_min, sweep_quality_checks_max), step=1, key="sweep_quality_checks_max"))
 
         st.subheader("Capacity Utilization")
         use_util_overrides = st.checkbox("Override Utilization Mean/Std for all shop types", value=bool(_d("use_util_overrides", False)), key="use_util_overrides")
@@ -858,6 +947,7 @@ def main():
                     quality_checks, max_delay_factor, failure_penalty_rate, backup_shop_depth,
                     allocation_planner_mode,
                     enforce_first_layer_timeline_filter,
+                    enable_quality_check_sweep, sweep_quality_checks_min, sweep_quality_checks_max,
                     use_util_overrides, capacity_utilization_mean, capacity_utilization_std,
                     job_generation_mode, job_generation_probability, custom_days_selection,
                     output_base, shop_type_params_override, job_config_override,
@@ -872,6 +962,7 @@ def main():
                 quality_checks, max_delay_factor, failure_penalty_rate, backup_shop_depth,
                 allocation_planner_mode,
                 enforce_first_layer_timeline_filter,
+                enable_quality_check_sweep, sweep_quality_checks_min, sweep_quality_checks_max,
                 use_util_overrides, capacity_utilization_mean, capacity_utilization_std,
                 job_generation_mode, job_generation_probability, custom_days_selection,
                 output_base, shop_type_params_override, job_config_override,
@@ -952,6 +1043,30 @@ def main():
                             enforce_first_layer_timeline_filter=enforce_first_layer_timeline_filter,
                             text_overrides=plot_text_overrides,
                         )
+                        if enable_quality_check_sweep:
+                            _run_primary_quality_check_sweep(
+                                checks_min=sweep_quality_checks_min,
+                                checks_max=sweep_quality_checks_max,
+                                runs=int(runs),
+                                shops=int(shops),
+                                days=int(days),
+                                jobs_per_day=int(jobs_per_day),
+                                seed=int(seed),
+                                failure_penalty_rate=float(failure_penalty_rate),
+                                max_delay_factor=float(max_delay_factor),
+                                backup_shop_depth=int(backup_shop_depth),
+                                allocation_planner_mode=allocation_planner_mode,
+                                enforce_first_layer_timeline_filter=enforce_first_layer_timeline_filter,
+                                capacity_utilization_mean=capacity_utilization_mean,
+                                capacity_utilization_std=capacity_utilization_std,
+                                job_generation_mode=job_generation_mode,
+                                job_generation_probability=float(job_generation_probability),
+                                job_generation_days=job_generation_days,
+                                shop_type_params_override=shop_type_params_override,
+                                job_config=job_config_override,
+                                output_dir=str(output_dir),
+                                text_overrides=plot_text_overrides,
+                            )
                         # Re-label primary figures to match dashboard terminology.
                         plot_shop_statistics(agg_primary, output_dir=str(output_dir), label="FullNetwork", text_overrides=plot_text_overrides)
                         plot_job_statistics(agg_primary, output_dir=str(output_dir), label="FullNetwork", text_overrides=plot_text_overrides)
@@ -1009,6 +1124,9 @@ def main():
                                 plot_job_statistics(partial_agg, output_dir=str(output_dir), label="PartialNetwork", text_overrides=plot_text_overrides)
                                 plot_success_rates_vs_targets(partial_agg, output_dir=str(output_dir), label="PartialNetwork", text_overrides=plot_text_overrides)
                                 plot_completed_only_quality_rate(partial_agg, output_dir=str(output_dir), label="PartialNetwork", text_overrides=plot_text_overrides)
+
+                    if enable_quality_check_sweep and case_mode not in ("full network", "all cases"):
+                        st.warning("Quality-check sweep runs only for primary/full-network mode. Switch Case to 'full network' or 'all cases'.")
 
                     if (
                         case_mode == "all cases"

@@ -311,6 +311,58 @@ def plot_completed_only_quality_rate(agg: dict, output_dir: str = ".", label: st
     print(f"Saved: {fname}")
 
 
+def plot_primary_quality_check_sweep(
+    sweep_rows: list[dict],
+    output_dir: str = ".",
+    label: str = "Primary",
+    text_overrides: dict[str, str] | None = None,
+):
+    """Plot cost, quality success, and timeline success across quality-check sweep values."""
+    if not sweep_rows:
+        return
+
+    out = Path(output_dir)
+    out.mkdir(parents=True, exist_ok=True)
+
+    rows = sorted(sweep_rows, key=lambda r: int(r["quality_checks"]))
+    x = np.array([int(r["quality_checks"]) for r in rows])
+    cost = np.array([float(r.get("mean_cost", 0.0)) for r in rows])
+    quality = np.array([float(r.get("quality_success_rate", 0.0)) for r in rows])
+    timeline = np.array([float(r.get("timeline_success_rate", 0.0)) for r in rows])
+
+    fig, axes = plt.subplots(3, 1, figsize=(12, 10), sharex=True)
+    _base_style(fig)
+    fig.suptitle(f"Primary Sweep: Quality Checks vs Outcomes{' — ' + label if label else ''}", fontsize=17, fontweight="bold", color="#0B2A44")
+
+    ax = axes[0]
+    ax.plot(x, cost, color=MODE_COLORS["primary"], linewidth=2.0, marker="o")
+    ax.set_ylabel("Mean Cost ($)", fontsize=13, color="#0B2A44")
+    ax.set_title("Cost", fontsize=13, color="#0B2A44")
+    _style_axis(ax, grid_y=True)
+
+    ax = axes[1]
+    ax.plot(x, quality, color=MODE_COLORS["secondary_random"], linewidth=2.0, marker="o")
+    ax.set_ylim(0, 1)
+    ax.set_ylabel("Rate", fontsize=13, color="#0B2A44")
+    ax.set_title("Quality Success Rate", fontsize=13, color="#0B2A44")
+    _style_axis(ax, grid_y=True)
+
+    ax = axes[2]
+    ax.plot(x, timeline, color=MODE_COLORS["secondary_quality"], linewidth=2.0, marker="o")
+    ax.set_ylim(0, 1)
+    ax.set_ylabel("Rate", fontsize=13, color="#0B2A44")
+    ax.set_xlabel("Number of Quality Checks", fontsize=13, color="#0B2A44")
+    ax.set_title("Timeline Success Rate", fontsize=13, color="#0B2A44")
+    _style_axis(ax, grid_y=True)
+
+    _apply_text_overrides(fig, text_overrides)
+    plt.tight_layout()
+    fname = out / f"primary_quality_check_sweep{'_' + label if label else ''}.png"
+    plt.savefig(fname, dpi=150, bbox_inches="tight")
+    plt.close()
+    print(f"Saved: {fname}")
+
+
 def plot_comparison(agg_primary: dict, agg_secondary_rand: dict, agg_secondary_qual: dict,
                     output_dir: str = ".", text_overrides: dict[str, str] | None = None):
     """Side-by-side quality and timeline success rate comparison across three modes."""
