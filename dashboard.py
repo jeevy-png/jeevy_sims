@@ -11,6 +11,7 @@ import pandas as pd
 import streamlit as st
 
 from plotting import (
+    plot_completed_only_quality_rate,
     plot_comparison,
     plot_job_cost_comparison,
     plot_job_statistics,
@@ -512,6 +513,7 @@ def _run_primary(
     plot_shop_statistics(agg, output_dir=output_dir, label="Primary", text_overrides=text_overrides)
     plot_job_statistics(agg, output_dir=output_dir, label="Primary", text_overrides=text_overrides)
     plot_success_rates_vs_targets(agg, output_dir=output_dir, label="Primary", text_overrides=text_overrides)
+    plot_completed_only_quality_rate(agg, output_dir=output_dir, label="Primary", text_overrides=text_overrides)
     return agg, run_sims
 
 
@@ -569,6 +571,7 @@ def _run_secondary(
         plot_shop_statistics(agg, output_dir=output_dir, label=label, text_overrides=text_overrides)
         plot_job_statistics(agg, output_dir=output_dir, label=label, text_overrides=text_overrides)
         plot_success_rates_vs_targets(agg, output_dir=output_dir, label=label, text_overrides=text_overrides)
+        plot_completed_only_quality_rate(agg, output_dir=output_dir, label=label, text_overrides=text_overrides)
 
     return results
 
@@ -953,6 +956,7 @@ def main():
                         plot_shop_statistics(agg_primary, output_dir=str(output_dir), label="FullNetwork", text_overrides=plot_text_overrides)
                         plot_job_statistics(agg_primary, output_dir=str(output_dir), label="FullNetwork", text_overrides=plot_text_overrides)
                         plot_success_rates_vs_targets(agg_primary, output_dir=str(output_dir), label="FullNetwork", text_overrides=plot_text_overrides)
+                        plot_completed_only_quality_rate(agg_primary, output_dir=str(output_dir), label="FullNetwork", text_overrides=plot_text_overrides)
                         for idx, sim in enumerate(primary_sims, start=1):
                             map_paths.append(
                                 _plot_network_map(
@@ -997,12 +1001,14 @@ def main():
                                 plot_shop_statistics(base_agg, output_dir=str(output_dir), label="BaseCase", text_overrides=plot_text_overrides)
                                 plot_job_statistics(base_agg, output_dir=str(output_dir), label="BaseCase", text_overrides=plot_text_overrides)
                                 plot_success_rates_vs_targets(base_agg, output_dir=str(output_dir), label="BaseCase", text_overrides=plot_text_overrides)
+                                plot_completed_only_quality_rate(base_agg, output_dir=str(output_dir), label="BaseCase", text_overrides=plot_text_overrides)
                         elif case_mode == "partial network":
                             partial_agg = agg_secondary.get("quality_top", {}).get("agg")
                             if partial_agg:
                                 plot_shop_statistics(partial_agg, output_dir=str(output_dir), label="PartialNetwork", text_overrides=plot_text_overrides)
                                 plot_job_statistics(partial_agg, output_dir=str(output_dir), label="PartialNetwork", text_overrides=plot_text_overrides)
                                 plot_success_rates_vs_targets(partial_agg, output_dir=str(output_dir), label="PartialNetwork", text_overrides=plot_text_overrides)
+                                plot_completed_only_quality_rate(partial_agg, output_dir=str(output_dir), label="PartialNetwork", text_overrides=plot_text_overrides)
 
                     if (
                         case_mode == "all cases"

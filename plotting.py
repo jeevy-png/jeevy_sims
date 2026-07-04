@@ -276,6 +276,41 @@ def plot_success_rates_vs_targets(agg: dict, output_dir: str = ".", label: str =
     print(f"Saved: {fname}")
 
 
+def plot_completed_only_quality_rate(agg: dict, output_dir: str = ".", label: str = "", text_overrides: dict[str, str] | None = None):
+    """Bar chart: completed-only quality success rate vs target per job type."""
+    out = Path(output_dir)
+    out.mkdir(parents=True, exist_ok=True)
+
+    job_types = agg.get("job_type_indices") or sorted(agg.get("agg_quality_rate_completed_only", {}).keys())
+    if not job_types:
+        job_types = [1]
+
+    completed_only_rates = [agg.get("agg_quality_rate_completed_only", {}).get(jt, 0.0) for jt in job_types]
+    q_targets = [agg.get("q_target_map", {}).get(jt, 0.0) for jt in job_types]
+
+    fig, ax = plt.subplots(1, 1, figsize=(10, 5))
+    _base_style(fig)
+    fig.suptitle(f"Completed-Only Quality Success Rate{' — ' + label if label else ''}", fontsize=17, fontweight="bold", color="#0B2A44")
+
+    x = np.arange(len(job_types))
+    ax.bar(x - 0.18, completed_only_rates, 0.35, label="Completed-only actual", color=MODE_COLORS["primary"], edgecolor="white")
+    ax.bar(x + 0.18, q_targets, 0.35, label="Target", color=MODE_COLORS["target"], edgecolor="white", alpha=0.95)
+    ax.set_xticks(x)
+    ax.set_xticklabels([f"T{jt}" for jt in job_types])
+    ax.set_xlabel("Job Type", fontsize=13, color="#0B2A44")
+    ax.set_ylabel("Rate", fontsize=13, color="#0B2A44")
+    ax.set_ylim(0, 1)
+    ax.legend(fontsize=10, frameon=False)
+    _style_axis(ax, grid_y=True)
+
+    _apply_text_overrides(fig, text_overrides)
+    plt.tight_layout()
+    fname = out / f"completed_only_quality_rate{'_' + label if label else ''}.png"
+    plt.savefig(fname, dpi=150, bbox_inches="tight")
+    plt.close()
+    print(f"Saved: {fname}")
+
+
 def plot_comparison(agg_primary: dict, agg_secondary_rand: dict, agg_secondary_qual: dict,
                     output_dir: str = ".", text_overrides: dict[str, str] | None = None):
     """Side-by-side quality and timeline success rate comparison across three modes."""

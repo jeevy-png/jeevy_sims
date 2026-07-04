@@ -131,6 +131,7 @@ def aggregate_runs(all_run_stats: list[dict]) -> dict:
     # Group by job type
     cost_by_type:         dict[int, list[float]] = defaultdict(list)
     quality_ok_by_type:   dict[int, list[int]]   = defaultdict(list)
+    quality_ok_completed_by_type: dict[int, list[int]] = defaultdict(list)
     timeline_ok_by_type:  dict[int, list[int]]   = defaultdict(list)
 
     # Also group by reliability targets (for success-rate plots)
@@ -142,6 +143,7 @@ def aggregate_runs(all_run_stats: list[dict]) -> dict:
         jt = job.job_type_index
         if job.completed:
             cost_by_type[jt].append(job.total_cost)
+            quality_ok_completed_by_type[jt].append(1 if job.quality_success else 0)
         # Quality success metric: passed final quality checks / total cases run.
         # Jobs not completed by horizon do not count as a final quality pass.
         quality_ok_by_type[jt].append(1 if (job.completed and job.quality_success) else 0)
@@ -159,6 +161,7 @@ def aggregate_runs(all_run_stats: list[dict]) -> dict:
     agg_cost_mean: dict[int, float] = {}
     agg_cost_var:  dict[int, float] = {}
     agg_quality_rate:   dict[int, float] = {}
+    agg_quality_rate_completed_only: dict[int, float] = {}
     agg_timeline_rate:  dict[int, float] = {}
     agg_days_late_by_type: dict[int, float] = {}
 
@@ -175,8 +178,10 @@ def aggregate_runs(all_run_stats: list[dict]) -> dict:
         agg_cost_mean[jt] = float(np.mean(costs)) if costs else 0.0
         agg_cost_var[jt]  = float(np.var(costs))  if costs else 0.0
         qok  = quality_ok_by_type.get(jt, [])
+        qok_completed = quality_ok_completed_by_type.get(jt, [])
         tok  = timeline_ok_by_type.get(jt, [])
         agg_quality_rate[jt]  = float(np.mean(qok))  if qok  else 0.0
+        agg_quality_rate_completed_only[jt] = float(np.mean(qok_completed)) if qok_completed else 0.0
         agg_timeline_rate[jt] = float(np.mean(tok))  if tok  else 0.0
 
         # Per requested definition: compute per-run days-late by job type, then average across runs.
@@ -204,6 +209,7 @@ def aggregate_runs(all_run_stats: list[dict]) -> dict:
         agg_cost_mean=agg_cost_mean,
         agg_cost_var=agg_cost_var,
         agg_quality_rate=agg_quality_rate,
+        agg_quality_rate_completed_only=agg_quality_rate_completed_only,
         agg_timeline_rate=agg_timeline_rate,
         quality_total_cases=quality_total_cases,
         quality_passed_cases=quality_passed_cases,
