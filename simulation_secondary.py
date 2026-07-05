@@ -122,6 +122,7 @@ class SecondarySimulationRun:
                 self.jobs[job.job_id] = job
                 for comp in job.components:
                     comp.total_cost += comp.material_cost
+                    comp.material_cost_total += comp.material_cost
             self.unassigned_pool.extend(new_components)
 
         # 2. Determine which unassigned workers are busy with external work today
@@ -175,13 +176,17 @@ class SecondarySimulationRun:
         if failure_type == "quality":
             if comp.quality_failure_penalty_applied:
                 return
-            comp.total_cost += comp.total_cost * self.failure_penalty_rate
+            penalty = comp.total_cost * self.failure_penalty_rate
+            comp.total_cost += penalty
+            comp.failure_penalty_cost_total += penalty
             comp.quality_failure_penalty_applied = True
             return
         if failure_type == "timeline":
             if comp.timeline_failure_penalty_applied:
                 return
-            comp.total_cost += comp.total_cost * self.failure_penalty_rate
+            penalty = comp.total_cost * self.failure_penalty_rate
+            comp.total_cost += penalty
+            comp.failure_penalty_cost_total += penalty
             comp.timeline_failure_penalty_applied = True
 
     def _allocate_pool(self, day: int):
@@ -270,6 +275,7 @@ class SecondarySimulationRun:
                 )
                 labor_cost = daily_mh * comp.base_labor_rate * shop.labor_cost_multiplier
                 comp.total_cost += labor_cost
+                comp.labor_cost_total += labor_cost
                 day_profit += labor_cost * 0.10
             # Profit from workers busy on external jobs
             if shop.busy_workers_today > 0:
@@ -285,7 +291,9 @@ class SecondarySimulationRun:
             # Transport directly from shop to delivery location (no hub)
             if shop is not None:
                 d = distance(shop.location, comp.delivery_location)
-                comp.total_cost += comp.base_transportation_cost * d
+                delivery_transport_cost = comp.base_transportation_cost * d
+                comp.total_cost += delivery_transport_cost
+                comp.transport_cost_total += delivery_transport_cost
 
             # Final quality check: no cost, no re-routing, but marks failure
             q_pass = shop.quality_rate if shop else 0.9
@@ -307,9 +315,16 @@ class SecondarySimulationRun:
 
                 for c in job.components:
                     job.total_cost += c.total_cost
+                    job.material_cost_total += c.material_cost_total
+                    job.labor_cost_total += c.labor_cost_total
+                    job.transport_cost_total += c.transport_cost_total
+                    job.quality_cost_total += c.quality_cost_total
+                    job.failure_penalty_cost_total += c.failure_penalty_cost_total
 
                 if job.days_late > 0 and job.late_penalty_per_day > 0:
-                    job.total_cost += job.total_cost * job.late_penalty_per_day * job.days_late
+                    late_penalty = job.total_cost * job.late_penalty_per_day * job.days_late
+                    job.total_cost += late_penalty
+                    job.late_penalty_cost_total += late_penalty
 
                 self.completed_jobs.append(job)
 

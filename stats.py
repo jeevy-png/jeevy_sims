@@ -165,12 +165,37 @@ def aggregate_runs(all_run_stats: list[dict]) -> dict:
     agg_timeline_rate:  dict[int, float] = {}
     agg_days_late_by_type: dict[int, float] = {}
 
+    cost_category_totals = {
+        "material": 0.0,
+        "labor": 0.0,
+        "transport": 0.0,
+        "quality": 0.0,
+        "failure_penalty": 0.0,
+        "late_penalty": 0.0,
+    }
+
     quality_total_cases = int(len(all_jobs))
     quality_passed_cases = int(sum(1 for job in all_jobs if job.completed and job.quality_success))
     quality_failed_cases = quality_total_cases - quality_passed_cases
 
     completed_jobs_count = int(sum(1 for job in all_jobs if job.completed))
     failed_final_quality_count = int(sum(1 for job in all_jobs if job.completed and not job.quality_success))
+
+    for job in all_jobs:
+        if not job.completed:
+            continue
+        cost_category_totals["material"] += float(getattr(job, "material_cost_total", 0.0))
+        cost_category_totals["labor"] += float(getattr(job, "labor_cost_total", 0.0))
+        cost_category_totals["transport"] += float(getattr(job, "transport_cost_total", 0.0))
+        cost_category_totals["quality"] += float(getattr(job, "quality_cost_total", 0.0))
+        cost_category_totals["failure_penalty"] += float(getattr(job, "failure_penalty_cost_total", 0.0))
+        cost_category_totals["late_penalty"] += float(getattr(job, "late_penalty_cost_total", 0.0))
+
+    total_completed_job_cost = float(sum(cost_category_totals.values()))
+    agg_cost_category_shares = {
+        key: (value / total_completed_job_cost if total_completed_job_cost > 0 else 0.0)
+        for key, value in cost_category_totals.items()
+    }
 
     for jt in job_types:
         costs = cost_by_type.get(jt, [])
@@ -211,6 +236,8 @@ def aggregate_runs(all_run_stats: list[dict]) -> dict:
         agg_quality_rate=agg_quality_rate,
         agg_quality_rate_completed_only=agg_quality_rate_completed_only,
         agg_timeline_rate=agg_timeline_rate,
+        agg_cost_category_totals=cost_category_totals,
+        agg_cost_category_shares=agg_cost_category_shares,
         quality_total_cases=quality_total_cases,
         quality_passed_cases=quality_passed_cases,
         quality_failed_cases=quality_failed_cases,

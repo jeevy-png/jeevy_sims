@@ -11,10 +11,12 @@ import pandas as pd
 import streamlit as st
 
 from plotting import (
-    plot_primary_quality_check_sweep,
+    plot_primary_quality_check_cost_sweep,
+    plot_primary_quality_check_failure_rates_sweep,
     plot_completed_only_quality_rate,
     plot_completed_only_quality_comparison,
     plot_comparison,
+    plot_mode_cost_breakdown_comparison,
     plot_job_cost_comparison,
     plot_job_statistics,
     plot_mode_operational_comparison,
@@ -592,7 +594,10 @@ def _run_primary_quality_check_sweep(
             }
         )
 
-    plot_primary_quality_check_sweep(rows, output_dir=output_dir, label="Primary", text_overrides=text_overrides)
+    sweep_path = Path(output_dir) / "primary_quality_check_sweep_rows_Primary.json"
+    sweep_path.write_text(json.dumps(rows, indent=2))
+    plot_primary_quality_check_failure_rates_sweep(rows, output_dir=output_dir, label="Primary", text_overrides=text_overrides)
+    plot_primary_quality_check_cost_sweep(rows, output_dir=output_dir, label="Primary", text_overrides=text_overrides)
     return rows
 
 
@@ -1162,6 +1167,13 @@ def main():
                             text_overrides=plot_text_overrides,
                         )
                         plot_job_cost_comparison(
+                            agg_primary=agg_primary,
+                            agg_secondary_rand=agg_secondary["random_cheapest"]["agg"],
+                            agg_secondary_qual=agg_secondary["quality_top"]["agg"],
+                            output_dir=str(output_dir),
+                            text_overrides=plot_text_overrides,
+                        )
+                        plot_mode_cost_breakdown_comparison(
                             agg_primary=agg_primary,
                             agg_secondary_rand=agg_secondary["random_cheapest"]["agg"],
                             agg_secondary_qual=agg_secondary["quality_top"]["agg"],

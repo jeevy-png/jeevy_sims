@@ -363,6 +363,90 @@ def plot_primary_quality_check_sweep(
     print(f"Saved: {fname}")
 
 
+def plot_primary_quality_check_failure_rates_sweep(
+    sweep_rows: list[dict],
+    output_dir: str = ".",
+    label: str = "Primary",
+    text_overrides: dict[str, str] | None = None,
+):
+    """Plot quality failure rate and timeline failure rate on the same axes across sweep values."""
+    if not sweep_rows:
+        return
+
+    out = Path(output_dir)
+    out.mkdir(parents=True, exist_ok=True)
+
+    rows = sorted(sweep_rows, key=lambda r: int(r["quality_checks"]))
+    x = np.array([int(r["quality_checks"]) for r in rows])
+    quality_fail = 1.0 - np.array([float(r.get("quality_success_rate", 0.0)) for r in rows])
+    timeline_fail = 1.0 - np.array([float(r.get("timeline_success_rate", 0.0)) for r in rows])
+
+    fig, ax = plt.subplots(1, 1, figsize=(12, 6))
+    _base_style(fig)
+    fig.suptitle(
+        f"Primary Sweep: Failure Rates vs Quality Checks{' — ' + label if label else ''}",
+        fontsize=17,
+        fontweight="bold",
+        color="#0B2A44",
+    )
+
+    ax.plot(x, quality_fail, color=MODE_COLORS["secondary_random"], linewidth=2.0, marker="o", label="Quality failure rate")
+    ax.plot(x, timeline_fail, color=MODE_COLORS["secondary_quality"], linewidth=2.0, marker="o", label="Timeline failure rate")
+    ax.set_ylim(0, 1)
+    ax.set_ylabel("Failure Rate", fontsize=13, color="#0B2A44")
+    ax.set_xlabel("Number of Quality Checks", fontsize=13, color="#0B2A44")
+    ax.set_title("Quality and Timeline Failure Rates", fontsize=14, color="#0B2A44")
+    ax.legend(fontsize=10, frameon=False)
+    _style_axis(ax, grid_y=True)
+
+    _apply_text_overrides(fig, text_overrides)
+    plt.tight_layout()
+    fname = out / f"primary_quality_check_failure_rates{'_' + label if label else ''}.png"
+    plt.savefig(fname, dpi=150, bbox_inches="tight")
+    plt.close()
+    print(f"Saved: {fname}")
+
+
+def plot_primary_quality_check_cost_sweep(
+    sweep_rows: list[dict],
+    output_dir: str = ".",
+    label: str = "Primary",
+    text_overrides: dict[str, str] | None = None,
+):
+    """Plot mean cost against quality-check count."""
+    if not sweep_rows:
+        return
+
+    out = Path(output_dir)
+    out.mkdir(parents=True, exist_ok=True)
+
+    rows = sorted(sweep_rows, key=lambda r: int(r["quality_checks"]))
+    x = np.array([int(r["quality_checks"]) for r in rows])
+    cost = np.array([float(r.get("mean_cost", 0.0)) for r in rows])
+
+    fig, ax = plt.subplots(1, 1, figsize=(12, 6))
+    _base_style(fig)
+    fig.suptitle(
+        f"Primary Sweep: Cost vs Quality Checks{' — ' + label if label else ''}",
+        fontsize=17,
+        fontweight="bold",
+        color="#0B2A44",
+    )
+
+    ax.plot(x, cost, color=MODE_COLORS["primary"], linewidth=2.2, marker="o")
+    ax.set_ylabel("Mean Cost ($)", fontsize=13, color="#0B2A44")
+    ax.set_xlabel("Number of Quality Checks", fontsize=13, color="#0B2A44")
+    ax.set_title("Mean Cost", fontsize=14, color="#0B2A44")
+    _style_axis(ax, grid_y=True)
+
+    _apply_text_overrides(fig, text_overrides)
+    plt.tight_layout()
+    fname = out / f"primary_quality_check_cost{'_' + label if label else ''}.png"
+    plt.savefig(fname, dpi=150, bbox_inches="tight")
+    plt.close()
+    print(f"Saved: {fname}")
+
+
 def plot_comparison(agg_primary: dict, agg_secondary_rand: dict, agg_secondary_qual: dict,
                     output_dir: str = ".", text_overrides: dict[str, str] | None = None):
     """Side-by-side quality and timeline success rate comparison across three modes."""
@@ -406,6 +490,56 @@ def plot_comparison(agg_primary: dict, agg_secondary_rand: dict, agg_secondary_q
     _apply_text_overrides(fig, text_overrides)
     plt.tight_layout()
     fname = out / "mode_comparison.png"
+    plt.savefig(fname, dpi=150, bbox_inches="tight")
+    plt.close()
+    print(f"Saved: {fname}")
+
+
+def plot_completed_only_quality_comparison(
+    agg_primary: dict,
+    agg_secondary_rand: dict,
+    agg_secondary_qual: dict,
+    output_dir: str = ".",
+    text_overrides: dict[str, str] | None = None,
+):
+    """Grouped-bar comparison of completed-only quality success rates across three modes."""
+    out = Path(output_dir)
+    out.mkdir(parents=True, exist_ok=True)
+
+    job_types = sorted(
+        set(agg_primary.get("job_type_indices", []))
+        | set(agg_secondary_rand.get("job_type_indices", []))
+        | set(agg_secondary_qual.get("job_type_indices", []))
+    )
+    if not job_types:
+        job_types = [1]
+
+    x = np.arange(len(job_types))
+    w = 0.22
+
+    fig, ax = plt.subplots(1, 1, figsize=(14, 5))
+    _base_style(fig)
+    fig.suptitle("Mode Comparison: Completed-Only Quality Success Rate", fontsize=17, fontweight="bold", color="#0B2A44")
+
+    p = [agg_primary.get("agg_quality_rate_completed_only", {}).get(jt, 0.0) for jt in job_types]
+    sr = [agg_secondary_rand.get("agg_quality_rate_completed_only", {}).get(jt, 0.0) for jt in job_types]
+    sq = [agg_secondary_qual.get("agg_quality_rate_completed_only", {}).get(jt, 0.0) for jt in job_types]
+
+    ax.bar(x - w, p, w, label="Primary", color=MODE_COLORS["primary"], edgecolor="white")
+    ax.bar(x, sr, w, label="Sec: Random", color=MODE_COLORS["secondary_random"], edgecolor="white")
+    ax.bar(x + w, sq, w, label="Sec: Quality-top", color=MODE_COLORS["secondary_quality"], edgecolor="white")
+    ax.set_xticks(x)
+    ax.set_xticklabels([f"T{jt}" for jt in job_types])
+    ax.set_title("Completed-Only Quality Success Rate", fontsize=14, color="#0B2A44")
+    ax.set_xlabel("Job Type", fontsize=13, color="#0B2A44")
+    ax.set_ylabel("Rate", fontsize=13, color="#0B2A44")
+    ax.set_ylim(0, 1)
+    ax.legend(fontsize=10, frameon=False)
+    _style_axis(ax, grid_y=True)
+
+    _apply_text_overrides(fig, text_overrides)
+    plt.tight_layout()
+    fname = out / "mode_comparison_completed_only_quality.png"
     plt.savefig(fname, dpi=150, bbox_inches="tight")
     plt.close()
     print(f"Saved: {fname}")
@@ -577,6 +711,66 @@ def plot_job_cost_comparison(agg_primary: dict, agg_secondary_rand: dict, agg_se
     _apply_text_overrides(fig, text_overrides)
     plt.tight_layout()
     fname = out / "job_cost_comparison.png"
+    plt.savefig(fname, dpi=150, bbox_inches="tight")
+    plt.close()
+
+
+def plot_mode_cost_breakdown_comparison(
+    agg_primary: dict,
+    agg_secondary_rand: dict,
+    agg_secondary_qual: dict,
+    output_dir: str = ".",
+    text_overrides: dict[str, str] | None = None,
+):
+    """Stacked bar chart of cost-category shares by simulation mode."""
+    out = Path(output_dir)
+    out.mkdir(parents=True, exist_ok=True)
+
+    categories = [
+        ("material", "Material", "#9BCBF3"),
+        ("labor_plus_failure", "Labor", "#1F77B4"),
+        ("transport", "Transport", "#6AAFE6"),
+        ("quality", "Quality Checks", "#0B4F8C"),
+        ("late_penalty", "Late Penalty", "#A63D40"),
+    ]
+    modes = [
+        (agg_primary, "Primary"),
+        (agg_secondary_rand, "Base Case"),
+        (agg_secondary_qual, "Quality Only"),
+    ]
+
+    fig, ax = plt.subplots(1, 1, figsize=(12, 6))
+    _base_style(fig)
+    fig.suptitle("Cost Breakdown by Mode", fontsize=17, fontweight="bold", color="#0B2A44")
+
+    x = np.arange(len(modes))
+    bottoms = np.zeros(len(modes))
+
+    for category_key, label, color in categories:
+        vals = []
+        for agg, _ in modes:
+            shares = agg.get("agg_cost_category_shares") or {}
+            if category_key == "labor_plus_failure":
+                vals.append(float(shares.get("labor", 0.0) + shares.get("failure_penalty", 0.0)))
+            else:
+                vals.append(float(shares.get(category_key, 0.0)))
+        ax.bar(x, vals, bottom=bottoms, width=0.6, label=label, color=color, edgecolor="white", linewidth=0.8)
+        for idx, val in enumerate(vals):
+            if val >= 0.05:
+                ax.text(x[idx], bottoms[idx] + val / 2, f"{val * 100:.0f}%", ha="center", va="center", fontsize=9, color="#102235")
+        bottoms += np.array(vals)
+
+    ax.set_xticks(x)
+    ax.set_xticklabels([label for _, label in modes])
+    ax.set_ylim(0, 1)
+    ax.set_ylabel("Share of total completed-job cost", fontsize=13, color="#0B2A44")
+    ax.set_title("Stacked cost categories as % of total job cost", fontsize=14, color="#0B2A44")
+    ax.legend(fontsize=9, frameon=False, ncol=3)
+    _style_axis(ax, grid_y=True)
+
+    _apply_text_overrides(fig, text_overrides)
+    plt.tight_layout()
+    fname = out / "mode_cost_breakdown_comparison.png"
     plt.savefig(fname, dpi=150, bbox_inches="tight")
     plt.close()
     print(f"Saved: {fname}")

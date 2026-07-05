@@ -146,6 +146,11 @@ class JobComponent:
 
     # tracking
     total_cost: float = 0.0
+    material_cost_total: float = 0.0
+    labor_cost_total: float = 0.0
+    transport_cost_total: float = 0.0
+    quality_cost_total: float = 0.0
+    failure_penalty_cost_total: float = 0.0
     completed: bool = False
     quality_failed: bool = False       # failed final hub check
     timeline_failed: bool = False
@@ -204,6 +209,12 @@ class Job:
     day_created: int
 
     total_cost: float = 0.0
+    material_cost_total: float = 0.0
+    labor_cost_total: float = 0.0
+    transport_cost_total: float = 0.0
+    quality_cost_total: float = 0.0
+    failure_penalty_cost_total: float = 0.0
+    late_penalty_cost_total: float = 0.0
     completed: bool = False
     quality_success: bool = True
     timeline_success: bool = False
