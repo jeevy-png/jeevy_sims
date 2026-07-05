@@ -13,6 +13,7 @@ import streamlit as st
 from plotting import (
     plot_primary_quality_check_sweep,
     plot_completed_only_quality_rate,
+    plot_completed_only_quality_comparison,
     plot_comparison,
     plot_job_cost_comparison,
     plot_job_statistics,
@@ -662,7 +663,7 @@ def _render_images(output_dir: Path):
         return
 
     for image_path in images:
-        st.image(str(image_path), caption=image_path.name, use_container_width=True)
+        st.image(str(image_path), caption=image_path.name, width="stretch")
 
 
 def _quality_audit_rows(label: str, agg: Optional[dict]) -> list[dict]:
@@ -921,7 +922,7 @@ def main():
         shop_type_params_override = _shop_params_controls()
         job_config_override, selected_job_types = _job_config_controls(max_days=int(days))
 
-        run_clicked = st.button("Run Simulation", type="primary", use_container_width=True)
+        run_clicked = st.button("Run Simulation", type="primary", width="stretch")
 
     left_col, right_col = st.columns([1, 3])
 
@@ -930,7 +931,7 @@ def main():
 
         st.markdown("**Shop Parameters**")
         shop_df = _shop_assumptions_df(shop_type_params_override)
-        st.dataframe(shop_df, use_container_width=True)
+        st.dataframe(shop_df, width="stretch")
 
         st.markdown("**Job Parameters**")
         job_df = _job_assumptions_df(job_config_override, selected_job_types)
@@ -940,7 +941,7 @@ def main():
             return ["background-color: #ffcccc" if flag else "" for _ in row]
         st.dataframe(
             job_df.style.apply(_style_row, axis=1),
-            use_container_width=True,
+            width="stretch",
         )
         st.caption(
             "min_days_ideal = ceil(capacity / (max_workers × mh/worker)) — no delay, perfect efficiency.  \n"
@@ -952,7 +953,7 @@ def main():
         settings_name = st.text_input("Settings name", value="my_settings", key="settings_name_input")
         save_col, export_col = st.columns(2)
         with save_col:
-            if st.button("💾 Save settings", use_container_width=True):
+            if st.button("💾 Save settings", width="stretch"):
                 snap = _collect_settings(
                     case_mode, runs, shops, days, jobs_per_day, seed,
                     quality_checks, max_delay_factor, failure_penalty_rate, backup_shop_depth,
@@ -984,7 +985,7 @@ def main():
                 data=json.dumps(snap, indent=2),
                 file_name=f"{settings_name.strip() or 'settings'}.json",
                 mime="application/json",
-                use_container_width=True,
+                width="stretch",
             )
 
         uploaded = st.file_uploader("📤 Import settings JSON", type="json", key="settings_uploader")
@@ -1153,6 +1154,13 @@ def main():
                             output_dir=str(output_dir),
                             text_overrides=plot_text_overrides,
                         )
+                        plot_completed_only_quality_comparison(
+                            agg_primary=agg_primary,
+                            agg_secondary_rand=agg_secondary["random_cheapest"]["agg"],
+                            agg_secondary_qual=agg_secondary["quality_top"]["agg"],
+                            output_dir=str(output_dir),
+                            text_overrides=plot_text_overrides,
+                        )
                         plot_job_cost_comparison(
                             agg_primary=agg_primary,
                             agg_secondary_rand=agg_secondary["random_cheapest"]["agg"],
@@ -1204,7 +1212,7 @@ def main():
             rows += _quality_audit_rows("Partial Network", secondary.get("quality_top", {}).get("agg"))
             if rows:
                 st.subheader("Quality Audit")
-                st.dataframe(pd.DataFrame(rows), use_container_width=True)
+                st.dataframe(pd.DataFrame(rows), width="stretch")
                 st.caption("quality_success_rate = quality_passed_final / total_jobs_run")
 
         map_paths = st.session_state.get("last_map_paths", [])
@@ -1213,9 +1221,9 @@ def main():
             if len(map_paths) > 1:
                 run_index = st.slider("Network map run", min_value=1, max_value=len(map_paths), value=len(map_paths), step=1)
                 selected = map_paths[run_index - 1]
-                st.image(selected, caption=f"Run {run_index}: {Path(selected).name}", use_container_width=True)
+                st.image(selected, caption=f"Run {run_index}: {Path(selected).name}", width="stretch")
             else:
-                st.image(map_paths[0], caption=f"Run 1: {Path(map_paths[0]).name}", use_container_width=True)
+                st.image(map_paths[0], caption=f"Run 1: {Path(map_paths[0]).name}", width="stretch")
 
         last_output_dir = st.session_state.get("last_output_dir")
         if last_output_dir:

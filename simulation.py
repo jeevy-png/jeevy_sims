@@ -406,11 +406,30 @@ class SimulationRun:
         )
         return candidate is not None
 
+    def _finalize_quality_failure(self, comp: JobComponent, day_completed: Optional[int] = None):
+        """Mark component/job as terminal quality failure and detach from shop/work queues."""
+        comp.quality_failed = True
+        self._apply_failure_penalty(comp, "quality")
+        self.jobs[comp.job_id].quality_success = False
+
+        # A terminal quality failure is considered a completed (unsuccessful) component outcome.
+        if not comp.completed:
+            comp.completed = True
+            comp.day_completed = day_completed
+
+        if comp in self.active_components:
+            self.active_components.remove(comp)
+        if comp in self.unassigned_pool:
+            self.unassigned_pool.remove(comp)
+        if comp.assigned_shop is not None and comp in comp.assigned_shop.assigned_components:
+            comp.assigned_shop.assigned_components.remove(comp)
+        comp.assigned_shop = None
+
     def _handle_quality_failure(self, comp: JobComponent, shop: Shop) -> bool:
         """Returns True if component should be re-routed, False if it should continue."""
         comp.quality_failure_count += 1
         elapsed = comp.deadline_days - comp.days_remaining
-        if elapsed <= comp.max_delay:
+        if elapsed <= comp.max_delay and self._can_reroute_now(comp, shop):
             comp.manhours_done *= 0.7
             comp.quality_checks_done = 0
             comp.compute_quality_check_thresholds(
@@ -420,10 +439,8 @@ class SimulationRun:
             )
             return True
 
-        # Only mark final quality failure when max-delay window is exceeded.
-        comp.quality_failed = True
-        self._apply_failure_penalty(comp, "quality")
-        self.jobs[comp.job_id].quality_success = False
+        # Terminal quality failure when max-delay is exceeded or no reroute can satisfy constraints/depth.
+        self._finalize_quality_failure(comp)
         return False
 
     # ------------------------------------------------------------------
@@ -451,6 +468,8 @@ class SimulationRun:
                         comp.prev_shop = shop
                         self.unassigned_pool.append(comp)
                         break
+                    # Terminal failure path; component is removed from queues by handler.
+                    break
                 else:
                     comp.quality_checks_done += 1
 
@@ -625,7 +644,8 @@ class SimulationRun:
                 enforce_first_layer_timeline_filter=self.enforce_first_layer_timeline_filter,
             )
             if best is None:
-                remaining.append(comp)
+                # No feasible reroute under current constraints/depth: terminal quality failure.
+                self._finalize_quality_failure(comp)
             else:
                 allocate_component(comp, best, day, True, self.shops, self.num_quality_checks)
                 self.active_components.append(comp)
@@ -773,13 +793,8 @@ class SimulationRun:
                         comp.prev_shop = shop
                         self.unassigned_pool.append(comp)
                     else:
-                        comp.completed = True
-                        comp.day_completed = day
-                        comp._completion_shop = shop
-                        newly_completed.append(comp)
-                        self.active_components.remove(comp)
-                        shop.assigned_components.remove(comp)
-                        comp.assigned_shop = None
+                        # Terminal failure path handled in _handle_quality_failure.
+                        pass
                 else:
                     comp.completed = True
                     comp.day_completed = day
